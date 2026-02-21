@@ -40,11 +40,17 @@ print(f"{len(measures)} mesures détectées.")
 print("Ouverture du port MIDI...")
 
 ports = mido.get_input_names()
-print("Ports disponibles :", ports)
 
 if not ports:
     print("Aucun port MIDI détecté.")
     exit()
+
+print("Ports disponibles :")
+
+for i, port in enumerate(ports):
+    print(f"{i}: {port}")
+
+port_index = int(input("Sélectionnez le port MIDI : "))
 
 current_measure = 0
 played_notes = []
@@ -57,7 +63,7 @@ def measure_completed(expected, played):
             exp.remove(p)
     return len(exp) == 0
 
-with mido.open_input(ports[-1]) as port:
+with mido.open_input(ports[port_index]) as port:
     print(f"\nMesure 1 / {len(measures)}")
     print("Écoute en cours...\n")
 
