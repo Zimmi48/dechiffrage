@@ -27,6 +27,13 @@ else:
     parts = list(score.parts[:2])
 
 # Extraction des notes par mesure (merge across selected parts)
+FRENCH_NOTES = ["Do", "Do#", "Ré", "Ré#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"]
+
+def midi_to_french(pitch: int) -> str:
+    name = FRENCH_NOTES[pitch % 12]
+    octave = pitch // 12 - 1
+    return f"{name}{octave}"
+
 measure_map: dict[int, list[int]] = {}
 for part in parts:
     for m in part.getElementsByClass(stream.Measure):
@@ -92,11 +99,11 @@ try:
                 expected = measures[current_measure]
 
                 if pitch not in expected:
-                    print(f"✗ ERREUR mesure {current_measure+1} : {pitch}")
+                    print(f"✗ ERREUR mesure {current_measure+1} : {midi_to_french(pitch)}")
                     continue
 
                 played_notes.append(pitch)
-                print(f"✓ OK {pitch}")
+                print(f"✓ OK {midi_to_french(pitch)}")
 
                 if measure_completed(expected, played_notes):
                     print(f"✅ Mesure {current_measure+1} validée.\n")
