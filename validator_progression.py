@@ -1,4 +1,7 @@
 import argparse
+import select
+import sys
+import time
 import mido
 from music21 import converter, note, chord, stream
 
@@ -63,23 +66,35 @@ def measure_completed(expected, played):
             exp.remove(p)
     return len(exp) == 0
 
-with mido.open_input(ports[port_index]) as port:
-    print(f"\nMesure 1 / {len(measures)}")
-    print("Écoute en cours...\n")
+try:
+    with mido.open_input(ports[port_index]) as port:
+        print(f"\nMesure 1 / {len(measures)}")
+        print("Écoute en cours... (Ctrl+C ou tapez q puis Entrée pour quitter)\n")
 
-    for msg in port:
-        if msg.type == 'note_on' and msg.velocity > 0:
-
+        running = True
+        while running:
             if current_measure >= len(measures):
                 print("🎉 Pièce terminée.")
                 break
 
-            pitch = msg.note
-            expected = measures[current_measure]
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            if ready:
+                command = sys.stdin.readline().strip().lower()
+                if command in {"q", "quit"}:
+                    print("\nArrêt de l'écoute.")
+                    break
 
-            if pitch not in expected:
-                print(f"✗ ERREUR mesure {current_measure+1} : {pitch}")
-            else:
+            for msg in port.iter_pending():
+                if msg.type != 'note_on' or msg.velocity <= 0:
+                    continue
+
+                pitch = msg.note
+                expected = measures[current_measure]
+
+                if pitch not in expected:
+                    print(f"✗ ERREUR mesure {current_measure+1} : {pitch}")
+                    continue
+
                 played_notes.append(pitch)
                 print(f"✓ OK {pitch}")
 
@@ -90,3 +105,8 @@ with mido.open_input(ports[port_index]) as port:
 
                     if current_measure < len(measures):
                         print(f"Mesure {current_measure+1} / {len(measures)}")
+
+            time.sleep(0.01)
+except KeyboardInterrupt:
+    print("\n\nArrêt de l'écoute.")
+    sys.exit(0)
