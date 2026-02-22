@@ -41,19 +41,35 @@ notes_should_be_held = {}
 
 def should_note_be_held(pitch, current_idx):
     """Détermine si une note devrait encore être tenue basé sur les événements précédents."""
-    # Chercher dans les événements précédents si cette note doit être tenue
-    for i in range(current_idx):
+    # Chercher la dernière occurrence de cette note avant l'événement actuel
+    last_occurrence_idx = None
+    for i in range(current_idx - 1, -1, -1):  # Recherche en arrière
         event = events[i]
         if pitch in event.pitches:
-            # Vérifier si la note se chevauche avec l'événement actuel
-            # Une note devrait être tenue si:
-            # 1. Elle a été initiée avant l'événement actuel
-            # 2. Son offset + durée s'étend au-delà du début de l'événement actuel
-            if current_idx < len(events):
-                current_offset = events[current_idx].offset
-                note_end_offset = event.offset + event.duration
-                if note_end_offset > current_offset:
-                    return True
+            last_occurrence_idx = i
+            break  # On s'arrête à la première occurrence trouvée (la plus récente)
+
+    if last_occurrence_idx is None:
+        return False  # Cette note n'a jamais été jouée avant
+
+    # Vérifier si la dernière occurrence se chevauche avec l'événement actuel
+    last_event = events[last_occurrence_idx]
+    if current_idx < len(events):
+        current_event = events[current_idx]
+        current_offset = float(current_event.offset)
+        note_end_offset = float(last_event.offset + last_event.duration)
+        last_offset = float(last_event.offset)
+
+        # Si les deux événements commencent au même moment, pas de warning
+        # (cela représente la même note dans différentes voix/durées en notation musicale)
+        # Utiliser une petite tolérance pour les comparaisons flottantes
+        if abs(last_offset - current_offset) < 1e-9:
+            return False
+
+        # Une note doit être tenue si elle se termine strictement après le début de l'événement suivant
+        # Utiliser une tolérance pour éviter les problèmes d'arrondissement
+        return note_end_offset > current_offset + 1e-9
+
     return False
 
 def validate_note_held(pitch):
@@ -128,6 +144,52 @@ def main():
 
     # Trier par offset (ordre temporel) - les offsets sont maintenant absolus
     events.sort(key=lambda e: e.offset)
+
+    # Fusionner les événements avec les mêmes pitches au même offset
+    # (notes notées dans plusieurs voix avec des durées différentes)
+    merged_events = []
+    i = 0
+    while i < len(events):
+        current = events[i]
+        # Chercher tous les événements au même offset avec des pitches qui se chevauchent
+        same_offset_events = [current]
+        j = i + 1
+        while j < len(events) and abs(float(events[j].offset - current.offset)) < 1e-9:
+            same_offset_events.append(events[j])
+            j += 1
+
+        # Grouper par pitch et garder la durée maximale pour chaque pitch
+        pitch_to_max_duration = {}
+        for event in same_offset_events:
+            for pitch in event.pitches:
+                if pitch not in pitch_to_max_duration:
+                    pitch_to_max_duration[pitch] = event.duration
+                else:
+                    pitch_to_max_duration[pitch] = max(pitch_to_max_duration[pitch], event.duration)
+
+        # Créer des événements fusionnés
+        # Si plusieurs pitches au même offset, les regrouper en accord si possible
+        processed_pitches = set()
+        for event in same_offset_events:
+            event_pitches = [p for p in event.pitches if p not in processed_pitches]
+            if not event_pitches:
+                continue
+
+            # Utiliser la durée maximale pour chaque pitch
+            max_duration = max(pitch_to_max_duration[p] for p in event_pitches)
+
+            if len(event_pitches) == 1:
+                merged_events.append(MusicEvent('note', event_pitches, max_duration,
+                                               event.offset, event.measure))
+            else:
+                merged_events.append(MusicEvent('chord', event_pitches, max_duration,
+                                               event.offset, event.measure))
+
+            processed_pitches.update(event_pitches)
+
+        i = j
+
+    events = merged_events
 
     print(f"{len(events)} événements musicaux détectés (notes et accords).")
     if events:
@@ -210,12 +272,17 @@ def main():
                             # Avant de valider, vérifier que les notes qui doivent être tenues le sont
                             missing_held_notes = []
                             if current_event_idx > 0:  # Il y a des événements précédents
+                                # Collecter tous les pitches uniques des événements précédents
+                                checked_pitches = set()
                                 for prev_idx in range(current_event_idx):
                                     prev_event = events[prev_idx]
                                     for prev_pitch in prev_event.pitches:
-                                        if should_note_be_held(prev_pitch, current_event_idx):
-                                            if prev_pitch not in currently_pressed:
-                                                missing_held_notes.append(prev_pitch)
+                                        # Ne vérifier chaque pitch qu'une seule fois
+                                        if prev_pitch not in checked_pitches:
+                                            checked_pitches.add(prev_pitch)
+                                            if should_note_be_held(prev_pitch, current_event_idx):
+                                                if prev_pitch not in currently_pressed:
+                                                    missing_held_notes.append(prev_pitch)
 
                             if missing_held_notes:
                                 note_names = ", ".join(midi_to_french(p) for p in missing_held_notes)

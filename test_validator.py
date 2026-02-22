@@ -216,6 +216,106 @@ class TestShouldNoteBeHeld(unittest.TestCase):
         # At event 1 (D4 at offset 2), the C4 (which ended at offset 1) should not need to be held
         self.assertFalse(should_note_be_held(60, 1))
 
+    def test_same_pitch_multiple_times_most_recent_checked(self):
+        """Test that only the most recent occurrence of a pitch is checked"""
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Create events with the same pitch appearing twice
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),   # C4: offset 0, duration 1, ends at 1
+            MusicEvent('note', [62], 1.0, 2.0, 1),   # D4: offset 2, duration 1, ends at 3
+            MusicEvent('note', [60], 2.0, 4.0, 1),   # C4 again: offset 4, duration 2, ends at 6
+            MusicEvent('note', [64], 1.0, 7.0, 2),   # E4: offset 7, duration 1, ends at 8
+        ]
+
+        validator_progression.events = events
+
+        # At event 3 (E4 at offset 7):
+        # - First C4 ended at offset 1 (no overlap with offset 7)
+        # - Second C4 ended at offset 6 (no overlap with offset 7)
+        # - So C4 should NOT need to be held (most recent occurrence should be checked)
+        result = should_note_be_held(60, 3)
+        self.assertFalse(result, "C4 should not need to be held at event 3 - most recent occurrence ended at offset 6")
+
+    def test_most_recent_pitch_overlaps(self):
+        """Test that a note should be held when the most recent occurrence overlaps"""
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),   # C4: offset 0, duration 1, ends at 1
+            MusicEvent('note', [60], 4.0, 2.0, 1),   # C4 again: offset 2, duration 4, ends at 6
+            MusicEvent('note', [64], 1.0, 4.0, 1),   # E4: offset 4, duration 1, ends at 5
+        ]
+
+        validator_progression.events = events
+
+        # At event 2 (E4 at offset 4):
+        # - First C4 ended at offset 1 (no overlap)
+        # - Second C4 ends at offset 6 (OVERLAPS with offset 4)
+        # - So C4 SHOULD need to be held (checking most recent occurrence)
+        result = should_note_be_held(60, 2)
+        self.assertTrue(result, "C4 should need to be held at event 2 - most recent occurrence ends at offset 6")
+
+    def test_note_in_chord_should_be_held(self):
+        """Test that notes in chords are properly tracked for held note detection"""
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('chord', [60, 64, 67], 3.0, 0.0, 1),  # C major chord: offset 0, duration 3, ends at 3
+            MusicEvent('note', [69], 1.0, 1.0, 1),           # A4: offset 1, duration 1, ends at 2
+        ]
+
+        validator_progression.events = events
+
+        # At event 1 (A4 at offset 1):
+        # - The chord (with C4, E4, G4) ends at offset 3
+        # - Current event is at offset 1
+        # - So all chord notes should be held
+        self.assertTrue(should_note_be_held(60, 1), "C4 from chord should be held")
+        self.assertTrue(should_note_be_held(64, 1), "E4 from chord should be held")
+        self.assertTrue(should_note_be_held(67, 1), "G4 from chord should be held")
+
+    def test_simultaneous_notes_different_durations(self):
+        """Test that simultaneous notes with different durations don't warn about each other"""
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # This represents the same note played in two voices with different durations
+        # Common in piano music notation
+        events = [
+            MusicEvent('note', [62], 0.5, 0.0, 1),   # Ré4: offset 0, duration 0.5, ends at 0.5
+            MusicEvent('note', [62], 1.0, 0.0, 1),   # Ré4: offset 0, duration 1.0, ends at 1.0 (same start time!)
+            MusicEvent('note', [64], 0.5, 0.5, 1),   # E4: offset 0.5, duration 0.5, ends at 1.0
+        ]
+
+        validator_progression.events = events
+
+        # Event 1 (Ré4 at offset 0) should NOT warn about event 0 (also Ré4 at offset 0)
+        # They start at the same time - the user presses the key once
+        self.assertFalse(should_note_be_held(62, 1), "Simultaneous notes shouldn't require holding")
+
+        # Event 2 (E4 at offset 0.5) SHOULD warn about Ré4 from event 1 (ends at 1.0)
+        self.assertTrue(should_note_be_held(62, 2), "Ré4 should still be held at event 2")
+
+    def test_notes_ending_exactly_when_next_starts(self):
+        """Test that notes ending exactly when next note starts don't cause false warnings"""
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),   # C4: offset 0, duration 1, ends at 1
+            MusicEvent('note', [62], 1.0, 1.0, 1),   # D4: offset 1, duration 1, ends at 2
+        ]
+
+        validator_progression.events = events
+
+        # Event 1 (D4 at offset 1) should NOT warn about C4 (which ends exactly at offset 1)
+        # Using floating point tolerance to handle rounding errors
+        self.assertFalse(should_note_be_held(60, 1), "Notes ending exactly when next starts shouldn't require holding")
+
 
 class TestFormatEvent(unittest.TestCase):
     """Test the format_event function"""
