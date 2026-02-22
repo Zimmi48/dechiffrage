@@ -76,7 +76,8 @@ def measure_completed(expected, played):
 try:
     with mido.open_input(ports[port_index]) as port:
         print(f"\nMesure 1 / {len(measures)}")
-        print("Écoute en cours... (Ctrl+C ou tapez q puis Entrée pour quitter)\n")
+        print("Écoute en cours... (Ctrl+C ou tapez q puis Entrée pour quitter)")
+        print("Commandes : j = mesure actuelle, j<numéro> = aller à la mesure\n")
 
         running = True
         while running:
@@ -90,6 +91,21 @@ try:
                 if command in {"q", "quit"}:
                     print("\nArrêt de l'écoute.")
                     break
+                elif command.startswith("j"):
+                    # Handle jump to bar: j alone shows current, j<number> jumps to that bar
+                    if command == "j":
+                        print(f"Mesure actuelle : {current_measure+1} / {len(measures)}")
+                    else:
+                        try:
+                            target_measure = int(command[1:])
+                            if 1 <= target_measure <= len(measures):
+                                current_measure = target_measure - 1
+                                played_notes = []
+                                print(f"Passage à la mesure {current_measure+1} / {len(measures)}")
+                            else:
+                                print(f"Erreur : mesure {target_measure} hors de portée (1-{len(measures)})")
+                        except ValueError:
+                            print(f"Erreur : commande invalide '{command}'. Utilisez 'j' ou 'j<numéro>'.")
 
             for msg in port.iter_pending():
                 if msg.type != 'note_on' or msg.velocity <= 0:
