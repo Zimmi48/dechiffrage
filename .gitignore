@@ -1,1 +1,6 @@
 .direnv/
+__pycache__/
+*.pyc
+*.pyo
+*.mxl
+*.zip

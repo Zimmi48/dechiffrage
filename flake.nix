@@ -17,6 +17,7 @@
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [
           mido
           python-rtmidi
+          pytest
         ]);
 
         music21 = mirpkgs.packages.${system}.music21.overrideAttrs (_: { doInstallCheck = false; });
