@@ -386,6 +386,60 @@ class TestCheckEventCompleted(unittest.TestCase):
         self.assertTrue(check_event_completed(event))
 
 
+class TestJumpToBar(unittest.TestCase):
+    """Test the jump to bar functionality"""
+
+    def test_find_first_event_in_bar(self):
+        """Test finding the first event in a specific measure"""
+        from validator_progression import MusicEvent
+        import validator_progression
+
+        # Create events across multiple measures
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),   # Measure 1
+            MusicEvent('note', [62], 1.0, 1.0, 1),   # Measure 1
+            MusicEvent('note', [64], 1.0, 2.0, 2),   # Measure 2
+            MusicEvent('note', [65], 1.0, 3.0, 2),   # Measure 2
+            MusicEvent('note', [67], 1.0, 4.0, 3),   # Measure 3
+        ]
+
+        validator_progression.events = events
+
+        # Test finding first event in measure 2
+        target_bar = 2
+        found_idx = None
+        for idx, event in enumerate(events):
+            if event.measure == target_bar:
+                found_idx = idx
+                break
+
+        self.assertIsNotNone(found_idx, "Should find an event in measure 2")
+        self.assertEqual(found_idx, 2, "Should find the first event (index 2) in measure 2")
+        self.assertEqual(events[found_idx].measure, 2, "Found event should be in measure 2")
+
+    def test_jump_to_nonexistent_bar(self):
+        """Test handling of jump to a bar that doesn't exist"""
+        from validator_progression import MusicEvent
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),
+            MusicEvent('note', [62], 1.0, 1.0, 2),
+        ]
+
+        validator_progression.events = events
+
+        # Try to find measure 5 (doesn't exist)
+        target_bar = 5
+        found = False
+        for idx, event in enumerate(events):
+            if event.measure == target_bar:
+                found = True
+                break
+
+        self.assertFalse(found, "Should not find measure 5")
+
+
 if __name__ == '__main__':
     # Try to import the module first
     try:

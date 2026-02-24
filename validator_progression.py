@@ -227,7 +227,7 @@ def main():
                 current_event = events[current_event_idx]
                 print(f"\nMesure {current_event.measure} / {measures_count}")
                 print(f"Attendu: {format_event(current_event)}")
-                print("Écoute en cours... (Ctrl+C ou tapez q puis Entrée pour quitter)\n")
+                print("Écoute en cours... (Ctrl+C, tapez 'q' pour quitter, ou 'j<numéro>' pour sauter à une mesure)\n")
 
             running = True
             while running:
@@ -241,6 +241,33 @@ def main():
                     if command in {"q", "quit"}:
                         print("\nArrêt de l'écoute.")
                         break
+                    elif command.startswith("j"):
+                        # Commande de saut vers une mesure spécifique
+                        try:
+                            # Extraire le numéro de mesure (après "j")
+                            bar_str = command[1:].strip()
+                            if bar_str:
+                                target_bar = int(bar_str)
+                                # Trouver le premier événement de cette mesure
+                                found = False
+                                for idx, event in enumerate(events):
+                                    if event.measure == target_bar:
+                                        current_event_idx = idx
+                                        current_event = events[current_event_idx]
+                                        currently_pressed.clear()
+                                        chord_start_time = None
+                                        pending_chord_notes = set()
+                                        print(f"\n⏭  Saut vers mesure {target_bar}")
+                                        print(f"Mesure {current_event.measure} / {measures_count}")
+                                        print(f"Attendu: {format_event(current_event)}\n")
+                                        found = True
+                                        break
+                                if not found:
+                                    print(f"✗ Mesure {target_bar} introuvable (valide: 1-{measures_count})")
+                            else:
+                                print("✗ Usage: j<numéro> (exemple: j12 pour aller à la mesure 12)")
+                        except ValueError:
+                            print("✗ Numéro de mesure invalide. Usage: j<numéro> (exemple: j12)")
 
                 for msg in port.iter_pending():
                     if msg.type == 'note_on' and msg.velocity > 0:
