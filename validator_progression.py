@@ -112,10 +112,20 @@ def main():
         default="both",
         help="Which hand to validate (default: both)",
     )
+    parser.add_argument(
+        "--repeats",
+        action="store_true",
+        help="Expand repeat signs in the score (default: disabled)",
+    )
     args = parser.parse_args()
 
     print("Chargement de la partition...")
     score = converter.parse(args.xml_file)
+
+    # Expand repeats if requested
+    if args.repeats:
+        print("Expansion des répétitions...")
+        score = score.expandRepeats()
 
     # Parts: index 0 = right hand, index 1 = left hand (standard grand staff)
     if args.hand == "right":
