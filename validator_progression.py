@@ -39,6 +39,46 @@ chord_start_time = None
 CHORD_WINDOW = 0.5
 notes_should_be_held = {}
 
+
+def merge_events(events):
+    """Merge events at the same offset into single events.
+
+    Combines notes from different hands (or voices) that share an offset into
+    one chord event, and deduplicates pitches that appear in multiple voices
+    by keeping the maximum duration.
+    """
+    events = sorted(events, key=lambda e: e.offset)
+    merged_events = []
+    i = 0
+    while i < len(events):
+        current = events[i]
+        same_offset_events = [current]
+        j = i + 1
+        while j < len(events) and abs(float(events[j].offset - current.offset)) < 1e-9:
+            same_offset_events.append(events[j])
+            j += 1
+
+        pitch_to_max_duration = {}
+        for event in same_offset_events:
+            for pitch in event.pitches:
+                if pitch not in pitch_to_max_duration:
+                    pitch_to_max_duration[pitch] = event.duration
+                else:
+                    pitch_to_max_duration[pitch] = max(pitch_to_max_duration[pitch], event.duration)
+
+        all_pitches = list(pitch_to_max_duration.keys())
+        max_duration = max(pitch_to_max_duration[p] for p in all_pitches)
+        first_event = same_offset_events[0]
+
+        if len(all_pitches) == 1:
+            merged_events.append(MusicEvent('note', all_pitches, max_duration,
+                                           first_event.offset, first_event.measure))
+        else:
+            merged_events.append(MusicEvent('chord', all_pitches, max_duration,
+                                           first_event.offset, first_event.measure))
+        i = j
+    return merged_events
+
 def should_note_be_held(pitch, current_idx):
     """Détermine si une note devrait encore être tenue basé sur les événements précédents."""
     # Chercher la dernière occurrence de cette note avant l'événement actuel
@@ -155,51 +195,7 @@ def main():
     # Trier par offset (ordre temporel) - les offsets sont maintenant absolus
     events.sort(key=lambda e: e.offset)
 
-    # Fusionner les événements avec les mêmes pitches au même offset
-    # (notes notées dans plusieurs voix avec des durées différentes)
-    merged_events = []
-    i = 0
-    while i < len(events):
-        current = events[i]
-        # Chercher tous les événements au même offset avec des pitches qui se chevauchent
-        same_offset_events = [current]
-        j = i + 1
-        while j < len(events) and abs(float(events[j].offset - current.offset)) < 1e-9:
-            same_offset_events.append(events[j])
-            j += 1
-
-        # Grouper par pitch et garder la durée maximale pour chaque pitch
-        pitch_to_max_duration = {}
-        for event in same_offset_events:
-            for pitch in event.pitches:
-                if pitch not in pitch_to_max_duration:
-                    pitch_to_max_duration[pitch] = event.duration
-                else:
-                    pitch_to_max_duration[pitch] = max(pitch_to_max_duration[pitch], event.duration)
-
-        # Créer des événements fusionnés
-        # Si plusieurs pitches au même offset, les regrouper en accord si possible
-        processed_pitches = set()
-        for event in same_offset_events:
-            event_pitches = [p for p in event.pitches if p not in processed_pitches]
-            if not event_pitches:
-                continue
-
-            # Utiliser la durée maximale pour chaque pitch
-            max_duration = max(pitch_to_max_duration[p] for p in event_pitches)
-
-            if len(event_pitches) == 1:
-                merged_events.append(MusicEvent('note', event_pitches, max_duration,
-                                               event.offset, event.measure))
-            else:
-                merged_events.append(MusicEvent('chord', event_pitches, max_duration,
-                                               event.offset, event.measure))
-
-            processed_pitches.update(event_pitches)
-
-        i = j
-
-    events = merged_events
+    events = merge_events(events)
 
     print(f"{len(events)} événements musicaux détectés (notes et accords).")
     if events:

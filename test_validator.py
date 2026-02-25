@@ -529,6 +529,139 @@ class TestRepeatExpansion(unittest.TestCase):
         # that the method can be called without error.
 
 
+class TestMergeEvents(unittest.TestCase):
+    """Test the merge_events function"""
+
+    def test_single_note_unchanged(self):
+        """A single note event is returned as-is"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [MusicEvent('note', [60], 1.0, 0.0, 1)]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].type, 'note')
+        self.assertEqual(result[0].pitches, [60])
+        self.assertEqual(result[0].duration, 1.0)
+
+    def test_two_notes_at_different_offsets_kept_separate(self):
+        """Notes at different offsets are not merged"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),
+            MusicEvent('note', [62], 1.0, 1.0, 1),
+        ]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].pitches, [60])
+        self.assertEqual(result[1].pitches, [62])
+
+    def test_both_hands_simultaneous_notes_merged_into_chord(self):
+        """Notes from left and right hands at the same offset become a single chord event"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),  # right hand: C4
+            MusicEvent('note', [52], 1.0, 0.0, 1),  # left hand: E3
+        ]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 1, "Should produce one merged event, not two sequential events")
+        self.assertEqual(result[0].type, 'chord')
+        self.assertIn(60, result[0].pitches)
+        self.assertIn(52, result[0].pitches)
+
+    def test_both_hands_chord_plus_note_merged(self):
+        """A right-hand chord and a left-hand note at the same offset are fully merged"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [
+            MusicEvent('chord', [60, 64, 67], 1.0, 0.0, 1),  # right hand: C major
+            MusicEvent('note', [48], 2.0, 0.0, 1),            # left hand: C3
+        ]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].type, 'chord')
+        self.assertIn(60, result[0].pitches)
+        self.assertIn(64, result[0].pitches)
+        self.assertIn(67, result[0].pitches)
+        self.assertIn(48, result[0].pitches)
+
+    def test_duplicate_pitch_deduplication_keeps_max_duration(self):
+        """The same pitch in two voices at the same offset is deduplicated, keeping max duration"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [
+            MusicEvent('note', [62], 0.5, 0.0, 1),  # Ré4: short duration
+            MusicEvent('note', [62], 1.0, 0.0, 1),  # Ré4: longer duration
+        ]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].type, 'note')
+        self.assertEqual(result[0].pitches, [62])
+        self.assertEqual(result[0].duration, 1.0)
+
+    def test_mixed_offsets_simultaneous_and_sequential(self):
+        """Simultaneous notes are merged while sequential notes remain separate"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),  # right hand beat 1
+            MusicEvent('note', [52], 1.0, 0.0, 1),  # left hand beat 1 (same offset)
+            MusicEvent('note', [62], 1.0, 1.0, 1),  # right hand beat 2
+            MusicEvent('note', [55], 1.0, 1.0, 1),  # left hand beat 2 (same offset)
+        ]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 2, "Two time points, each merged into one chord")
+        self.assertEqual(result[0].type, 'chord')
+        self.assertIn(60, result[0].pitches)
+        self.assertIn(52, result[0].pitches)
+        self.assertAlmostEqual(float(result[0].offset), 0.0)
+        self.assertEqual(result[1].type, 'chord')
+        self.assertIn(62, result[1].pitches)
+        self.assertIn(55, result[1].pitches)
+        self.assertAlmostEqual(float(result[1].offset), 1.0)
+
+    def test_merge_preserves_offset_and_measure(self):
+        """Merged events keep the offset and measure number of the first event"""
+        from validator_progression import MusicEvent, merge_events
+
+        events = [
+            MusicEvent('note', [60], 1.0, 4.0, 2),
+            MusicEvent('note', [52], 1.0, 4.0, 2),
+        ]
+        result = merge_events(events)
+
+        self.assertEqual(len(result), 1)
+        self.assertAlmostEqual(float(result[0].offset), 4.0)
+        self.assertEqual(result[0].measure, 2)
+
+
+class TestMergeEventsRegression(unittest.TestCase):
+    """Regression tests for the both-hands merging bug"""
+
+    def test_regression_both_hands_not_sequential(self):
+        """Regression: notes from both hands must not be treated as sequential events"""
+        from validator_progression import MusicEvent, merge_events
+
+        # Before the fix, this produced 2 events (played one after the other).
+        # After the fix it must produce exactly 1 chord event (played together).
+        right_hand = MusicEvent('note', [67], 1.0, 0.0, 1)  # G4
+        left_hand = MusicEvent('note', [43], 1.0, 0.0, 1)   # G2
+
+        result = merge_events([right_hand, left_hand])
+
+        self.assertNotEqual(len(result), 2,
+            "Bug regression: both-hands notes must not produce two sequential events")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].type, 'chord')
+
+
 if __name__ == '__main__':
     # Try to import the module first
     try:
