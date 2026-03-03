@@ -662,6 +662,46 @@ class TestMergeEventsRegression(unittest.TestCase):
         self.assertEqual(result[0].type, 'chord')
 
 
+class TestSoundFunctions(unittest.TestCase):
+    """Test sound feedback functions"""
+
+    def test_play_error_sound_does_not_crash(self):
+        """Test that play_error_sound can be called without crashing"""
+        from validator_progression import play_error_sound
+        import io
+        import sys
+
+        # Capture output to avoid printing beep character during tests
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+
+        try:
+            play_error_sound()
+            output = sys.stdout.getvalue()
+            # Should contain the bell character
+            self.assertIn('\a', output)
+        finally:
+            sys.stdout = old_stdout
+
+    def test_play_warning_sound_does_not_crash(self):
+        """Test that play_warning_sound can be called without crashing"""
+        from validator_progression import play_warning_sound
+        import io
+        import sys
+
+        # Capture output to avoid printing beep character during tests
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+
+        try:
+            play_warning_sound()
+            output = sys.stdout.getvalue()
+            # Should contain the bell character
+            self.assertIn('\a', output)
+        finally:
+            sys.stdout = old_stdout
+
+
 if __name__ == '__main__':
     # Try to import the module first
     try:
