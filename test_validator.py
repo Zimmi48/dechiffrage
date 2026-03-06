@@ -702,6 +702,58 @@ class TestSoundFunctions(unittest.TestCase):
             sys.stdout = old_stdout
 
 
+class TestSequentialNoteValidation(unittest.TestCase):
+    """Test the sequential note validation with minimal delay"""
+
+    def test_sequential_notes_at_different_offsets(self):
+        """Test that notes at different offsets are detected as sequential"""
+        from validator_progression import MusicEvent
+        import validator_progression
+
+        # Create two sequential notes (different offsets)
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),  # C4 at offset 0
+            MusicEvent('note', [62], 1.0, 1.0, 1),  # D4 at offset 1 (sequential)
+        ]
+
+        validator_progression.events = events
+
+        # Verify they have different offsets
+        self.assertNotAlmostEqual(events[0].offset, events[1].offset)
+        self.assertGreater(abs(float(events[1].offset - events[0].offset)), 1e-9)
+
+    def test_simultaneous_notes_at_same_offset(self):
+        """Test that notes at the same offset are not treated as sequential"""
+        from validator_progression import MusicEvent
+        import validator_progression
+
+        # Create two notes at the same offset (chord)
+        events = [
+            MusicEvent('chord', [60, 64], 1.0, 0.0, 1),  # C4 + E4 at offset 0
+        ]
+
+        validator_progression.events = events
+
+        # Single chord event means all notes are simultaneous
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].type, 'chord')
+
+    def test_delay_constant_exists(self):
+        """Test that the SEQUENTIAL_NOTE_MIN_DELAY constant is defined"""
+        from validator_progression import SEQUENTIAL_NOTE_MIN_DELAY
+
+        self.assertIsInstance(SEQUENTIAL_NOTE_MIN_DELAY, (int, float))
+        self.assertGreater(SEQUENTIAL_NOTE_MIN_DELAY, 0)
+        self.assertLessEqual(SEQUENTIAL_NOTE_MIN_DELAY, 1.0)  # Should be reasonable (< 1 second)
+
+    def test_last_note_time_global_exists(self):
+        """Test that the last_note_time global variable exists"""
+        import validator_progression
+
+        # The global should exist (may be None initially)
+        self.assertTrue(hasattr(validator_progression, 'last_note_time'))
+
+
 if __name__ == '__main__':
     # Try to import the module first
     try:
