@@ -140,6 +140,17 @@ def check_event_completed(event):
         # Un accord est complété si toutes ses notes sont jouées
         return all(p in currently_pressed for p in event.pitches)
 
+def play_error_sound():
+    """Joue un son d'erreur (bip système)."""
+    # Utilise le caractère bell (BEL) pour émettre un bip système
+    # Compatible avec tous les terminaux Unix/Linux/macOS/Windows
+    print("\a", end="", flush=True)
+
+def play_warning_sound():
+    """Joue un son d'avertissement (bip système)."""
+    # Utilise le caractère bell (BEL) pour émettre un bip système
+    print("\a", end="", flush=True)
+
 def main():
     """Main function to run the MIDI validator"""
     global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, notes_should_be_held
@@ -156,6 +167,11 @@ def main():
         "--repeats",
         action="store_true",
         help="Expand repeat signs in the score (default: disabled)",
+    )
+    parser.add_argument(
+        "--sound",
+        action="store_true",
+        help="Enable sound feedback for warnings and errors",
     )
     args = parser.parse_args()
 
@@ -284,6 +300,8 @@ def main():
                         # Vérifier si la note fait partie de l'événement attendu
                         if pitch not in current_event.pitches:
                             # Note inattendue
+                            if args.sound:
+                                play_error_sound()
                             print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
                             print(f"  Attendu: {format_event(current_event)}")
                             continue
@@ -318,6 +336,8 @@ def main():
                                                     missing_held_notes.append(prev_pitch)
 
                             if missing_held_notes:
+                                if args.sound:
+                                    play_warning_sound()
                                 note_names = ", ".join(midi_to_french(p) for p in missing_held_notes)
                                 print(f"⚠ AVERTISSEMENT : Notes devraient être tenues : {note_names}")
 
@@ -337,6 +357,8 @@ def main():
                                             print(f"Mesure {current_event.measure} / {measures_count}")
                                         print(f"Attendu: {format_event(current_event)}")
                                 else:
+                                    if args.sound:
+                                        play_error_sound()
                                     print(f"✗ ERREUR : Accord trop lent (>{CHORD_WINDOW}s)")
                                     # Réinitialiser pour réessayer
                                     chord_start_time = None
