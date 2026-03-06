@@ -311,6 +311,17 @@ def main():
                                 play_error_sound()
                             print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
                             print(f"  Attendu: {format_event(current_event)}")
+
+                            # Si on était en train de jouer un accord, réinitialiser l'état
+                            # pour que l'utilisateur puisse recommencer sans pénalité de temps
+                            if current_event.type == 'chord' and chord_start_time is not None:
+                                # Retirer les notes de l'accord en cours de currently_pressed
+                                for chord_pitch in current_event.pitches:
+                                    currently_pressed.discard(chord_pitch)
+                                # Réinitialiser l'état de l'accord
+                                chord_start_time = None
+                                pending_chord_notes = set()
+
                             continue
 
                         # Vérifier si l'événement actuel est séquentiel (offset différent) du précédent
