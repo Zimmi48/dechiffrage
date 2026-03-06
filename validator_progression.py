@@ -273,25 +273,28 @@ def main():
                             bar_str = command[1:].strip()
                             if bar_str:
                                 target_bar = int(bar_str)
-                                # Trouver le premier événement de cette mesure
-                                found = False
-                                for idx, event in enumerate(events):
-                                    if event.measure == target_bar:
-                                        current_event_idx = idx
-                                        current_event = events[current_event_idx]
-                                        currently_pressed.clear()
-                                        chord_start_time = None
-                                        pending_chord_notes = set()
-                                        last_note_time = None  # Réinitialiser le temps du dernier événement
-                                        print(f"\n⏭  Saut vers mesure {target_bar}")
-                                        print(f"Mesure {current_event.measure} / {measures_count}")
-                                        print(f"Attendu: {format_event(current_event)}\n")
-                                        found = True
-                                        break
-                                if not found:
-                                    print(f"✗ Mesure {target_bar} introuvable (valide: 1-{measures_count})")
                             else:
-                                print("✗ Usage: j<numéro> (exemple: j12 pour aller à la mesure 12)")
+                                # Si aucun numéro n'est fourni, sauter au début de la mesure actuelle
+                                current_event = events[current_event_idx]
+                                target_bar = current_event.measure
+
+                            # Trouver le premier événement de cette mesure
+                            found = False
+                            for idx, event in enumerate(events):
+                                if event.measure == target_bar:
+                                    current_event_idx = idx
+                                    current_event = events[current_event_idx]
+                                    currently_pressed.clear()
+                                    chord_start_time = None
+                                    pending_chord_notes = set()
+                                    last_note_time = None  # Réinitialiser le temps du dernier événement
+                                    print(f"\n⏭  Saut vers mesure {target_bar}")
+                                    print(f"Mesure {current_event.measure} / {measures_count}")
+                                    print(f"Attendu: {format_event(current_event)}\n")
+                                    found = True
+                                    break
+                            if not found:
+                                print(f"✗ Mesure {target_bar} introuvable (valide: 1-{measures_count})")
                         except ValueError:
                             print("✗ Numéro de mesure invalide. Usage: j<numéro> (exemple: j12)")
 

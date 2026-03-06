@@ -439,6 +439,44 @@ class TestJumpToBar(unittest.TestCase):
 
         self.assertFalse(found, "Should not find measure 5")
 
+    def test_jump_to_beginning_of_current_bar(self):
+        """Test that j without a number jumps to the beginning of the current bar"""
+        from validator_progression import MusicEvent
+        import validator_progression
+
+        # Create events across multiple measures
+        events = [
+            MusicEvent('note', [60], 1.0, 0.0, 1),   # Measure 1 - index 0
+            MusicEvent('note', [62], 1.0, 1.0, 1),   # Measure 1 - index 1
+            MusicEvent('note', [64], 1.0, 2.0, 2),   # Measure 2 - index 2 (first in bar 2)
+            MusicEvent('note', [65], 1.0, 3.0, 2),   # Measure 2 - index 3
+            MusicEvent('note', [67], 1.0, 4.0, 2),   # Measure 2 - index 4
+            MusicEvent('note', [69], 1.0, 5.0, 3),   # Measure 3 - index 5
+        ]
+
+        validator_progression.events = events
+
+        # Simulate being at index 4 (third event in measure 2)
+        validator_progression.current_event_idx = 4
+        current_event = events[validator_progression.current_event_idx]
+
+        # Get the current measure number
+        current_measure = current_event.measure
+        self.assertEqual(current_measure, 2, "Current event should be in measure 2")
+
+        # Find the first event of the current measure (simulating j without number)
+        target_bar = current_measure
+        found_idx = None
+        for idx, event in enumerate(events):
+            if event.measure == target_bar:
+                found_idx = idx
+                break
+
+        # Verify we found the first event of measure 2
+        self.assertIsNotNone(found_idx, "Should find first event in current measure")
+        self.assertEqual(found_idx, 2, "Should jump to first event (index 2) of measure 2")
+        self.assertEqual(events[found_idx].measure, 2, "Found event should be in measure 2")
+
 
 class TestRepeatExpansion(unittest.TestCase):
     """Test the repeat expansion functionality"""
