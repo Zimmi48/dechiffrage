@@ -252,7 +252,7 @@ def main():
                 current_event = events[current_event_idx]
                 print(f"\nMesure {current_event.measure} / {measures_count}")
                 print(f"Attendu: {format_event(current_event)}")
-                print("Écoute en cours... (Ctrl+C, tapez 'q' pour quitter, ou 'j<numéro>' pour sauter à une mesure)\n")
+                print("Écoute en cours... (Ctrl+C, tapez 'q' pour quitter, 'j<numéro>' pour sauter à une mesure, ou 'j' pour revenir au début de la mesure actuelle)\n")
 
             running = True
             while running:
@@ -296,7 +296,7 @@ def main():
                             if not found:
                                 print(f"✗ Mesure {target_bar} introuvable (valide: 1-{measures_count})")
                         except ValueError:
-                            print("✗ Numéro de mesure invalide. Usage: j<numéro> (exemple: j12)")
+                            print("✗ Numéro de mesure invalide. Usage: j<numéro> (exemple: j12) ou j pour le début de la mesure actuelle")
 
                 for msg in port.iter_pending():
                     if msg.type == 'note_on' and msg.velocity > 0:
