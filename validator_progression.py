@@ -37,7 +37,9 @@ currently_pressed = set()
 pending_chord_notes = set()
 chord_start_time = None
 CHORD_WINDOW = 0.5
+SEQUENTIAL_NOTE_MIN_DELAY = 0.1  # Minimum delay (in seconds) between sequential notes
 notes_should_be_held = {}
+last_note_time = None  # Timestamp when the last event was completed
 
 
 def merge_events(events):
@@ -153,7 +155,7 @@ def play_warning_sound():
 
 def main():
     """Main function to run the MIDI validator"""
-    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, notes_should_be_held
+    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, notes_should_be_held, last_note_time
 
     parser = argparse.ArgumentParser(description="MIDI piano validator")
     parser.add_argument("xml_file", help="Path to the MusicXML file")
@@ -237,6 +239,7 @@ def main():
     currently_pressed = set()  # Notes actuellement enfoncées (MIDI pitches)
     pending_chord_notes = set()  # Notes attendues pour compléter un accord
     chord_start_time = None  # Temps de début pour détecter un accord
+    last_note_time = None  # Temps de complétion du dernier événement
 
     # Pour le suivi des notes tenues
     notes_should_be_held = {}  # {pitch: event_idx} - notes qui devraient être tenues
@@ -279,6 +282,7 @@ def main():
                                         currently_pressed.clear()
                                         chord_start_time = None
                                         pending_chord_notes = set()
+                                        last_note_time = None  # Réinitialiser le temps du dernier événement
                                         print(f"\n⏭  Saut vers mesure {target_bar}")
                                         print(f"Mesure {current_event.measure} / {measures_count}")
                                         print(f"Attendu: {format_event(current_event)}\n")
@@ -305,6 +309,22 @@ def main():
                             print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
                             print(f"  Attendu: {format_event(current_event)}")
                             continue
+
+                        # Vérifier si l'événement actuel est séquentiel (offset différent) du précédent
+                        # et si les notes sont jouées trop rapidement
+                        if current_event_idx > 0 and last_note_time is not None:
+                            prev_event = events[current_event_idx - 1]
+                            # Si les événements ont des offsets différents (notes séquentielles)
+                            if abs(float(current_event.offset - prev_event.offset)) > 1e-9:
+                                time_since_last = time.time() - last_note_time
+                                if time_since_last < SEQUENTIAL_NOTE_MIN_DELAY:
+                                    # Notes séquentielles jouées trop rapidement (comme un accord)
+                                    if args.sound:
+                                        play_error_sound()
+                                    print(f"✗ ERREUR : {midi_to_french(pitch)} joué trop tôt")
+                                    print(f"  Les notes doivent être jouées séquentiellement avec un délai minimal de {SEQUENTIAL_NOTE_MIN_DELAY}s")
+                                    print(f"  Attendu: {format_event(current_event)}")
+                                    continue
 
                         # Ajouter la note aux notes actuellement enfoncées
                         currently_pressed.add(pitch)
@@ -349,6 +369,7 @@ def main():
                                     current_event_idx += 1
                                     chord_start_time = None
                                     pending_chord_notes = set()
+                                    last_note_time = time.time()  # Mettre à jour le temps du dernier événement
 
                                     if current_event_idx < len(events):
                                         current_event = events[current_event_idx]
@@ -368,6 +389,7 @@ def main():
                                 print(f"✅ {format_event(current_event)} validé.\n")
                                 prev_measure = current_event.measure
                                 current_event_idx += 1
+                                last_note_time = time.time()  # Mettre à jour le temps du dernier événement
 
                                 if current_event_idx < len(events):
                                     current_event = events[current_event_idx]
