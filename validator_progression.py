@@ -306,19 +306,17 @@ def main():
 
                         # Vérifier si la note fait partie de l'événement attendu
                         if pitch not in current_event.pitches:
+                            # Note inattendue (note simple ou accord)
+                            if args.sound:
+                                play_error_sound()
+                            print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
+                            print(f"  Attendu: {format_event(current_event)}")
+
+                            # Pour les accords, réinitialiser l'état pour permettre un nouvel essai
                             if current_event.type == 'chord':
-                                # Pour les accords, ne pas signaler d'erreur immédiate.
-                                # Démarrer le chronomètre si nécessaire et laisser
-                                # le mécanisme de timeout gérer l'erreur.
-                                if chord_start_time is None:
-                                    chord_start_time = time.time()
-                                    pending_chord_notes = set(current_event.pitches)
-                            else:
-                                # Note inattendue (note simple)
-                                if args.sound:
-                                    play_error_sound()
-                                print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
-                                print(f"  Attendu: {format_event(current_event)}")
+                                chord_start_time = None
+                                pending_chord_notes = set()
+                                currently_pressed.clear()
 
                             continue
 
