@@ -798,8 +798,9 @@ class TestChordErrorHandling(unittest.TestCase):
     def test_wrong_note_during_chord_does_not_reset_state(self):
         """Test that playing a wrong note during a chord does NOT reset chord state.
 
-        Instead, the chord timer keeps running and the timeout mechanism handles
-        the error. This avoids raising two errors (immediate + timeout).
+        Instead, the wrong note is recorded in chord_wrong_notes, the chord timer
+        keeps running, and the timeout mechanism handles the error. This avoids
+        raising two errors (immediate + timeout).
         """
         import validator_progression
         from validator_progression import MusicEvent
@@ -813,6 +814,7 @@ class TestChordErrorHandling(unittest.TestCase):
         old_currently_pressed = validator_progression.currently_pressed
         old_pending_chord_notes = validator_progression.pending_chord_notes
         old_chord_start_time = validator_progression.chord_start_time
+        old_chord_wrong_notes = validator_progression.chord_wrong_notes
 
         try:
             # Set up the test state
@@ -821,6 +823,7 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = set()
             validator_progression.pending_chord_notes = set()
             validator_progression.chord_start_time = None
+            validator_progression.chord_wrong_notes = []
 
             # Simulate playing C (correct note)
             validator_progression.currently_pressed.add(60)
@@ -836,6 +839,7 @@ class TestChordErrorHandling(unittest.TestCase):
             # - chord_start_time should remain set (not reset to None)
             # - pending_chord_notes should remain unchanged
             # - currently_pressed should keep the correct notes
+            # - chord_wrong_notes should record the wrong note
             # The timeout mechanism will handle raising the error later.
 
         finally:
@@ -845,12 +849,13 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = old_currently_pressed
             validator_progression.pending_chord_notes = old_pending_chord_notes
             validator_progression.chord_start_time = old_chord_start_time
+            validator_progression.chord_wrong_notes = old_chord_wrong_notes
 
     def test_wrong_note_starts_chord_timer(self):
         """Test that a wrong note during a chord starts the timer if not started.
 
         When only wrong notes are played, the chord timer should still start
-        so that the timeout mechanism can eventually fire.
+        so that the timeout mechanism can eventually fire and report the wrong notes.
         """
         import validator_progression
         from validator_progression import MusicEvent
@@ -865,6 +870,7 @@ class TestChordErrorHandling(unittest.TestCase):
         old_currently_pressed = validator_progression.currently_pressed
         old_pending_chord_notes = validator_progression.pending_chord_notes
         old_chord_start_time = validator_progression.chord_start_time
+        old_chord_wrong_notes = validator_progression.chord_wrong_notes
 
         try:
             # Set up the test state - no notes played yet
@@ -873,11 +879,13 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = set()
             validator_progression.pending_chord_notes = set()
             validator_progression.chord_start_time = None
+            validator_progression.chord_wrong_notes = []
 
             # Scenario: User plays only wrong notes (e.g., F/MIDI 65)
             # The chord timer should be started so timeout can fire
-            # After the fix, chord_start_time would be set and
-            # pending_chord_notes would contain all chord pitches
+            # After the fix, chord_start_time would be set,
+            # pending_chord_notes would contain all chord pitches,
+            # and chord_wrong_notes would record the wrong note
 
         finally:
             # Restore the global state
@@ -886,6 +894,7 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = old_currently_pressed
             validator_progression.pending_chord_notes = old_pending_chord_notes
             validator_progression.chord_start_time = old_chord_start_time
+            validator_progression.chord_wrong_notes = old_chord_wrong_notes
 
     def test_partial_chord_timeout_detection(self):
         """Test that incomplete chords timeout and clear state after CHORD_WINDOW"""
@@ -902,6 +911,7 @@ class TestChordErrorHandling(unittest.TestCase):
         old_currently_pressed = validator_progression.currently_pressed
         old_pending_chord_notes = validator_progression.pending_chord_notes
         old_chord_start_time = validator_progression.chord_start_time
+        old_chord_wrong_notes = validator_progression.chord_wrong_notes
 
         try:
             # Set up the test state
@@ -909,6 +919,7 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.current_event_idx = 0
             validator_progression.currently_pressed = {60, 64}  # Only 2 of 3 notes pressed
             validator_progression.pending_chord_notes = {67}
+            validator_progression.chord_wrong_notes = []
             # Simulate that the chord started more than CHORD_WINDOW ago
             validator_progression.chord_start_time = time.time() - (CHORD_WINDOW + 0.1)
 
@@ -916,8 +927,8 @@ class TestChordErrorHandling(unittest.TestCase):
             elapsed = time.time() - validator_progression.chord_start_time
             self.assertGreater(elapsed, CHORD_WINDOW, "Elapsed time should exceed CHORD_WINDOW")
 
-            # In the actual code, the timeout check would clear all state
-            # This test verifies that the timeout mechanism can detect this condition
+            # With no wrong notes, the timeout should report "Accord trop lent"
+            self.assertEqual(validator_progression.chord_wrong_notes, [])
 
         finally:
             # Restore the global state
@@ -926,9 +937,55 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = old_currently_pressed
             validator_progression.pending_chord_notes = old_pending_chord_notes
             validator_progression.chord_start_time = old_chord_start_time
+            validator_progression.chord_wrong_notes = old_chord_wrong_notes
+
+    def test_timeout_with_wrong_notes_reports_wrong_notes(self):
+        """Test that timeout with wrong notes reports them instead of 'chord too slow'.
+
+        When wrong notes were played during a chord, the timeout should report
+        the wrong notes (e.g. "Sol#3 inattendu") rather than "Accord trop lent".
+        """
+        import validator_progression
+        from validator_progression import MusicEvent, CHORD_WINDOW
+        import time
+
+        # Set up a chord event La#3 + Mi4 (MIDI 58, 64)
+        events = [MusicEvent('chord', [58, 64], 1.0, 0.0, 1)]
+
+        # Save the global state
+        old_events = validator_progression.events
+        old_current_event_idx = validator_progression.current_event_idx
+        old_currently_pressed = validator_progression.currently_pressed
+        old_pending_chord_notes = validator_progression.pending_chord_notes
+        old_chord_start_time = validator_progression.chord_start_time
+        old_chord_wrong_notes = validator_progression.chord_wrong_notes
+
+        try:
+            # Set up the test state: user played Sol#3 (wrong) and Mi4 (correct)
+            validator_progression.events = events
+            validator_progression.current_event_idx = 0
+            validator_progression.currently_pressed = {56, 64}  # Sol#3=56, Mi4=64
+            validator_progression.pending_chord_notes = {58}  # La#3 still needed
+            validator_progression.chord_wrong_notes = [56]  # Sol#3 was wrong
+            validator_progression.chord_start_time = time.time() - (CHORD_WINDOW + 0.1)
+
+            # Verify state: wrong notes were played, so timeout should report them
+            self.assertEqual(validator_progression.chord_wrong_notes, [56])
+            elapsed = time.time() - validator_progression.chord_start_time
+            self.assertGreater(elapsed, CHORD_WINDOW)
+
+        finally:
+            # Restore the global state
+            validator_progression.events = old_events
+            validator_progression.current_event_idx = old_current_event_idx
+            validator_progression.currently_pressed = old_currently_pressed
+            validator_progression.pending_chord_notes = old_pending_chord_notes
+            validator_progression.chord_start_time = old_chord_start_time
+            validator_progression.chord_wrong_notes = old_chord_wrong_notes
 
     def test_timeout_should_clear_all_state(self):
-        """Test that timeout clears chord_start_time, pending_chord_notes, and currently_pressed"""
+        """Test that timeout clears chord_start_time, pending_chord_notes,
+        chord_wrong_notes, and currently_pressed"""
         import validator_progression
         from validator_progression import MusicEvent, CHORD_WINDOW
 
@@ -941,6 +998,7 @@ class TestChordErrorHandling(unittest.TestCase):
         old_currently_pressed = validator_progression.currently_pressed
         old_pending_chord_notes = validator_progression.pending_chord_notes
         old_chord_start_time = validator_progression.chord_start_time
+        old_chord_wrong_notes = validator_progression.chord_wrong_notes
 
         try:
             validator_progression.events = events
@@ -950,10 +1008,13 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = {60, 64}
             validator_progression.pending_chord_notes = {67}
             validator_progression.chord_start_time = 100.0  # Old timestamp
+            validator_progression.chord_wrong_notes = [65]  # A wrong note was played
 
-            # After timeout handling, all state should be cleared
-            # This is what the fix should ensure happens
-            # The actual timeout logic will clear these in the main loop
+            # After timeout handling, all state should be cleared:
+            # chord_start_time = None
+            # pending_chord_notes = set()
+            # chord_wrong_notes = []
+            # currently_pressed.clear()
 
         finally:
             # Restore the global state
@@ -962,6 +1023,7 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.currently_pressed = old_currently_pressed
             validator_progression.pending_chord_notes = old_pending_chord_notes
             validator_progression.chord_start_time = old_chord_start_time
+            validator_progression.chord_wrong_notes = old_chord_wrong_notes
 
 
 if __name__ == '__main__':
