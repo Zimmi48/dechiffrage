@@ -420,6 +420,22 @@ def main():
                         # Vérifier si une note qui devrait être tenue a été relâchée prématurément
                         # (Pour l'instant, on ne valide pas strictement la durée des notes)
 
+                # Vérifier si un accord partiel a expiré (timeout)
+                if current_event_idx < len(events):
+                    current_event = events[current_event_idx]
+                    if current_event.type == 'chord' and chord_start_time is not None:
+                        elapsed = time.time() - chord_start_time
+                        if elapsed > CHORD_WINDOW:
+                            # L'accord est incomplet après le délai maximal
+                            if args.sound:
+                                play_error_sound()
+                            print(f"✗ ERREUR : Accord trop lent (>{CHORD_WINDOW}s)")
+                            print(f"  Attendu: {format_event(current_event)}")
+                            # Réinitialiser complètement l'état
+                            chord_start_time = None
+                            pending_chord_notes = set()
+                            currently_pressed.clear()
+
                 time.sleep(0.01)
     except KeyboardInterrupt:
         print("\n\nArrêt de l'écoute.")
