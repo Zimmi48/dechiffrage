@@ -315,7 +315,8 @@ def main():
                                 # if not already running, and let the timeout mechanism
                                 # report the error. This avoids double errors (immediate
                                 # + timeout) while still tracking what went wrong.
-                                chord_wrong_notes.append(pitch)
+                                if pitch not in chord_wrong_notes:
+                                    chord_wrong_notes.append(pitch)
                                 if chord_start_time is None:
                                     chord_start_time = time.time()
                                     pending_chord_notes = set(current_event.pitches)
