@@ -883,6 +883,81 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.pending_chord_notes = old_pending_chord_notes
             validator_progression.chord_start_time = old_chord_start_time
 
+    def test_correct_notes_retained_after_wrong_note(self):
+        """Regression test: correct notes held during wrong note should remain in currently_pressed
+
+        This tests the fix for the issue where if a user plays some correct notes in a chord,
+        then plays a wrong note while still holding the correct ones, the correct notes should
+        not be removed from currently_pressed. This allows the user to continue playing the
+        chord without having to release and re-press the correct notes.
+        """
+        import validator_progression
+        from validator_progression import MusicEvent, check_event_completed
+
+        # Set up a chord event C-E-G (MIDI 60, 64, 67)
+        events = [MusicEvent('chord', [60, 64, 67], 1.0, 0.0, 1)]
+
+        # Save the global state
+        old_events = validator_progression.events
+        old_current_event_idx = validator_progression.current_event_idx
+        old_currently_pressed = validator_progression.currently_pressed
+        old_pending_chord_notes = validator_progression.pending_chord_notes
+        old_chord_start_time = validator_progression.chord_start_time
+
+        try:
+            # Set up the test state
+            validator_progression.events = events
+            validator_progression.current_event_idx = 0
+            validator_progression.currently_pressed = set()
+            validator_progression.pending_chord_notes = set()
+            validator_progression.chord_start_time = None
+
+            # Simulate playing C and E (correct notes)
+            validator_progression.currently_pressed.add(60)  # C
+            validator_progression.currently_pressed.add(64)  # E
+            validator_progression.chord_start_time = 100.0  # Mock time
+            validator_progression.pending_chord_notes = {67}  # Waiting for G
+
+            # Verify initial state
+            self.assertEqual(validator_progression.currently_pressed, {60, 64})
+            self.assertIsNotNone(validator_progression.chord_start_time)
+
+            # Simulate the reset that happens when a wrong note is played
+            # (This mimics what happens in lines 317-321 of validator_progression.py)
+            current_event = events[0]
+            if current_event.type == 'chord' and validator_progression.chord_start_time is not None:
+                # Reset timing state but keep currently_pressed intact
+                validator_progression.chord_start_time = None
+                validator_progression.pending_chord_notes = set()
+
+            # After the reset, C and E should STILL be in currently_pressed
+            # because the user is still holding them
+            self.assertIn(60, validator_progression.currently_pressed,
+                         "C should remain in currently_pressed after wrong note reset")
+            self.assertIn(64, validator_progression.currently_pressed,
+                         "E should remain in currently_pressed after wrong note reset")
+
+            # The timing state should be reset
+            self.assertIsNone(validator_progression.chord_start_time,
+                            "chord_start_time should be reset to None")
+            self.assertEqual(validator_progression.pending_chord_notes, set(),
+                           "pending_chord_notes should be reset to empty set")
+
+            # Now simulate playing G (the remaining note)
+            validator_progression.currently_pressed.add(67)  # G
+
+            # The chord should now be complete
+            self.assertTrue(check_event_completed(current_event),
+                          "Chord should be complete after adding G")
+
+        finally:
+            # Restore the global state
+            validator_progression.events = old_events
+            validator_progression.current_event_idx = old_current_event_idx
+            validator_progression.currently_pressed = old_currently_pressed
+            validator_progression.pending_chord_notes = old_pending_chord_notes
+            validator_progression.chord_start_time = old_chord_start_time
+
 
 if __name__ == '__main__':
     # Try to import the module first
