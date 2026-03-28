@@ -36,6 +36,7 @@ current_event_idx = 0
 currently_pressed = set()
 pending_chord_notes = set()
 chord_start_time = None
+chord_wrong_notes = []  # Wrong notes played during the current chord window
 CHORD_WINDOW = 0.5
 SEQUENTIAL_NOTE_MIN_DELAY = 0.1  # Minimum delay (in seconds) between sequential notes
 notes_should_be_held = {}
@@ -155,7 +156,7 @@ def play_warning_sound():
 
 def main():
     """Main function to run the MIDI validator"""
-    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, notes_should_be_held, last_note_time
+    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, chord_wrong_notes, notes_should_be_held, last_note_time
 
     parser = argparse.ArgumentParser(description="MIDI piano validator")
     parser.add_argument("xml_file", help="Path to the MusicXML file")
@@ -239,6 +240,7 @@ def main():
     currently_pressed = set()  # Notes actuellement enfoncées (MIDI pitches)
     pending_chord_notes = set()  # Notes attendues pour compléter un accord
     chord_start_time = None  # Temps de début pour détecter un accord
+    chord_wrong_notes = []  # Wrong notes played during the current chord window
     last_note_time = None  # Temps de complétion du dernier événement
 
     # Pour le suivi des notes tenues
@@ -287,6 +289,7 @@ def main():
                                     currently_pressed.clear()
                                     chord_start_time = None
                                     pending_chord_notes = set()
+                                    chord_wrong_notes = []
                                     last_note_time = None  # Réinitialiser le temps du dernier événement
                                     print(f"\n⏭  Saut vers mesure {target_bar}")
                                     print(f"Mesure {current_event.measure} / {measures_count}")
@@ -306,17 +309,22 @@ def main():
 
                         # Vérifier si la note fait partie de l'événement attendu
                         if pitch not in current_event.pitches:
-                            # Note inattendue (note simple ou accord)
-                            if args.sound:
-                                play_error_sound()
-                            print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
-                            print(f"  Attendu: {format_event(current_event)}")
-
-                            # Pour les accords, réinitialiser l'état pour permettre un nouvel essai
                             if current_event.type == 'chord':
-                                chord_start_time = None
-                                pending_chord_notes = set()
-                                currently_pressed.clear()
+                                # For chords, don't raise an immediate error on wrong notes.
+                                # Instead, record the wrong note, start the chord timer
+                                # if not already running, and let the timeout mechanism
+                                # report the error. This avoids double errors (immediate
+                                # + timeout) while still tracking what went wrong.
+                                chord_wrong_notes.append(pitch)
+                                if chord_start_time is None:
+                                    chord_start_time = time.time()
+                                    pending_chord_notes = set(current_event.pitches)
+                            else:
+                                # Note inattendue (note simple)
+                                if args.sound:
+                                    play_error_sound()
+                                print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
+                                print(f"  Attendu: {format_event(current_event)}")
 
                             continue
 
@@ -379,6 +387,7 @@ def main():
                                     current_event_idx += 1
                                     chord_start_time = None
                                     pending_chord_notes = set()
+                                    chord_wrong_notes = []
                                     last_note_time = time.time()  # Mettre à jour le temps du dernier événement
 
                                     if current_event_idx < len(events):
@@ -394,6 +403,7 @@ def main():
                                     # Réinitialiser pour réessayer
                                     chord_start_time = None
                                     pending_chord_notes = set(current_event.pitches)
+                                    chord_wrong_notes = []
                                     currently_pressed.clear()
                             else:  # note simple
                                 print(f"✅ {format_event(current_event)} validé.\n")
@@ -416,20 +426,33 @@ def main():
                         # Vérifier si une note qui devrait être tenue a été relâchée prématurément
                         # (Pour l'instant, on ne valide pas strictement la durée des notes)
 
-                # Vérifier si un accord partiel a expiré (timeout)
+                # Check for chord timeout (active monitoring of partial chords).
+                # When the chord window expires, report the appropriate error:
+                # - If wrong notes were played, report them (not "chord too slow").
+                # - If only correct notes were played but the chord is incomplete,
+                #   report "chord too slow".
+                # Then clear all state so the user can retry cleanly.
                 if current_event_idx < len(events):
                     current_event = events[current_event_idx]
                     if current_event.type == 'chord' and chord_start_time is not None:
                         elapsed = time.time() - chord_start_time
                         if elapsed > CHORD_WINDOW:
-                            # L'accord est incomplet après le délai maximal
                             if args.sound:
                                 play_error_sound()
-                            print(f"✗ ERREUR : Accord trop lent (>{CHORD_WINDOW}s)")
+                            if chord_wrong_notes:
+                                # Report the wrong notes that were played
+                                wrong_names = ", ".join(
+                                    midi_to_french(p) for p in chord_wrong_notes
+                                )
+                                print(f"✗ ERREUR : {wrong_names} inattendu")
+                            else:
+                                # Only correct notes were played, but not all of them
+                                print(f"✗ ERREUR : Accord trop lent (>{CHORD_WINDOW}s)")
                             print(f"  Attendu: {format_event(current_event)}")
-                            # Réinitialiser complètement l'état
+                            # Full state reset for clean retry
                             chord_start_time = None
                             pending_chord_notes = set()
+                            chord_wrong_notes = []
                             currently_pressed.clear()
 
                 time.sleep(0.01)
