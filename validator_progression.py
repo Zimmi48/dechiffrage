@@ -363,9 +363,21 @@ def main():
                             missing_held_notes = []
                             if current_event_idx > 0:  # Il y a des événements précédents
                                 # Collecter tous les pitches uniques des événements précédents
+                                # OPTIMIZATION: Only check recent events that could potentially overlap
+                                # with the current event. We iterate backwards and stop once we've gone
+                                # far enough back that no note could possibly still be sounding.
                                 checked_pitches = set()
-                                for prev_idx in range(current_event_idx):
+                                current_offset = float(current_event.offset)
+
+                                for prev_idx in range(current_event_idx - 1, -1, -1):
                                     prev_event = events[prev_idx]
+                                    prev_end_offset = float(prev_event.offset + prev_event.duration)
+
+                                    # Stop looking back if this event ended before the current event started
+                                    # and we've already found some pitches to check
+                                    if prev_end_offset <= current_offset and checked_pitches:
+                                        break
+
                                     for prev_pitch in prev_event.pitches:
                                         # Ne vérifier chaque pitch qu'une seule fois
                                         if prev_pitch not in checked_pitches:
