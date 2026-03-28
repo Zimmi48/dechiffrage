@@ -795,8 +795,12 @@ class TestSequentialNoteValidation(unittest.TestCase):
 class TestChordErrorHandling(unittest.TestCase):
     """Test chord validation error handling when wrong notes are played"""
 
-    def test_wrong_note_during_chord_resets_state(self):
-        """Test that playing a wrong note during a chord resets the chord state"""
+    def test_wrong_note_during_chord_does_not_reset_state(self):
+        """Test that playing a wrong note during a chord does NOT reset chord state.
+
+        Instead, the chord timer keeps running and the timeout mechanism handles
+        the error. This avoids raising two errors (immediate + timeout).
+        """
         import validator_progression
         from validator_progression import MusicEvent
 
@@ -828,14 +832,11 @@ class TestChordErrorHandling(unittest.TestCase):
             self.assertIsNotNone(validator_progression.chord_start_time)
             self.assertEqual(validator_progression.pending_chord_notes, {64, 67})
 
-            # Now simulate playing F (wrong note, MIDI 65) - this should reset the chord state
-            # In the actual code, when a wrong note is detected, we should reset:
-            # - Remove chord notes from currently_pressed
-            # - Reset chord_start_time to None
-            # - Reset pending_chord_notes
-
-            # This is the behavior we want to verify exists after the fix
-            # For now, we'll just verify the current behavior doesn't match expectations
+            # After a wrong note (e.g., F/MIDI 65), the chord state should be preserved:
+            # - chord_start_time should remain set (not reset to None)
+            # - pending_chord_notes should remain unchanged
+            # - currently_pressed should keep the correct notes
+            # The timeout mechanism will handle raising the error later.
 
         finally:
             # Restore the global state
@@ -845,8 +846,12 @@ class TestChordErrorHandling(unittest.TestCase):
             validator_progression.pending_chord_notes = old_pending_chord_notes
             validator_progression.chord_start_time = old_chord_start_time
 
-    def test_chord_state_after_wrong_note(self):
-        """Test that chord state is properly cleared when wrong note is played"""
+    def test_wrong_note_starts_chord_timer(self):
+        """Test that a wrong note during a chord starts the timer if not started.
+
+        When only wrong notes are played, the chord timer should still start
+        so that the timeout mechanism can eventually fire.
+        """
         import validator_progression
         from validator_progression import MusicEvent
         import time
@@ -862,18 +867,17 @@ class TestChordErrorHandling(unittest.TestCase):
         old_chord_start_time = validator_progression.chord_start_time
 
         try:
-            # Set up the test state
+            # Set up the test state - no notes played yet
             validator_progression.events = events
             validator_progression.current_event_idx = 0
             validator_progression.currently_pressed = set()
             validator_progression.pending_chord_notes = set()
             validator_progression.chord_start_time = None
 
-            # Scenario: User plays C (correct), then E (correct), then F (wrong)
-            # After the wrong note, if user releases all and plays C-E-G correctly,
-            # it should not say "too slow"
-
-            # This test documents the expected behavior after the fix
+            # Scenario: User plays only wrong notes (e.g., F/MIDI 65)
+            # The chord timer should be started so timeout can fire
+            # After the fix, chord_start_time would be set and
+            # pending_chord_notes would contain all chord pitches
 
         finally:
             # Restore the global state

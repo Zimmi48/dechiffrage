@@ -306,21 +306,19 @@ def main():
 
                         # Vérifier si la note fait partie de l'événement attendu
                         if pitch not in current_event.pitches:
-                            # Note inattendue
-                            if args.sound:
-                                play_error_sound()
-                            print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
-                            print(f"  Attendu: {format_event(current_event)}")
-
-                            # Si on était en train de jouer un accord, réinitialiser l'état
-                            # pour que l'utilisateur puisse recommencer sans pénalité de temps
-                            if current_event.type == 'chord' and chord_start_time is not None:
-                                # Retirer les notes de l'accord en cours de currently_pressed
-                                for chord_pitch in current_event.pitches:
-                                    currently_pressed.discard(chord_pitch)
-                                # Réinitialiser l'état de l'accord
-                                chord_start_time = None
-                                pending_chord_notes = set()
+                            if current_event.type == 'chord':
+                                # Pour les accords, ne pas signaler d'erreur immédiate.
+                                # Démarrer le chronomètre si nécessaire et laisser
+                                # le mécanisme de timeout gérer l'erreur.
+                                if chord_start_time is None:
+                                    chord_start_time = time.time()
+                                    pending_chord_notes = set(current_event.pitches)
+                            else:
+                                # Note inattendue (note simple)
+                                if args.sound:
+                                    play_error_sound()
+                                print(f"✗ ERREUR : {midi_to_french(pitch)} inattendu")
+                                print(f"  Attendu: {format_event(current_event)}")
 
                             continue
 
