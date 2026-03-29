@@ -316,6 +316,32 @@ class TestShouldNoteBeHeld(unittest.TestCase):
         # Using floating point tolerance to handle rounding errors
         self.assertFalse(should_note_be_held(60, 1), "Notes ending exactly when next starts shouldn't require holding")
 
+    def test_long_note_with_shorter_notes_between(self):
+        """Test that long notes are detected even when shorter notes are between them.
+
+        This is a regression test for the bug where the optimization to scan backwards
+        would stop too early when it encountered a short note that ended before the
+        current event, missing long notes that started earlier but still overlapped.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 8.0, 0.0, 1),   # C4: offset 0, duration 8, ends at 8 (LONG NOTE)
+            MusicEvent('note', [62], 1.0, 2.0, 1),   # D4: offset 2, duration 1, ends at 3 (short note)
+            MusicEvent('note', [64], 1.0, 4.0, 1),   # E4: offset 4, duration 1, ends at 5 (current event)
+        ]
+
+        validator_progression.events = events
+
+        # At event 2 (E4 at offset 4):
+        # - Event 1 (D4) ended at offset 3, which is before offset 4
+        # - But Event 0 (C4) ends at offset 8, which is AFTER offset 4
+        # - So C4 SHOULD be held even though D4 ended before the current event
+        self.assertTrue(should_note_be_held(60, 2),
+                       "Long note C4 should be held at event 2 even though shorter note D4 ended earlier")
+
+
 
 class TestFormatEvent(unittest.TestCase):
     """Test the format_event function"""

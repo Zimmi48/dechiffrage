@@ -176,6 +176,11 @@ def main():
         action="store_true",
         help="Enable sound feedback for warnings and errors",
     )
+    parser.add_argument(
+        "--debug-held-notes",
+        action="store_true",
+        help="Enable debug tracing for held note warnings",
+    )
     args = parser.parse_args()
 
     print("Chargement de la partition...")
@@ -364,27 +369,48 @@ def main():
                             if current_event_idx > 0:  # Il y a des événements précédents
                                 # Collecter tous les pitches uniques des événements précédents
                                 # OPTIMIZATION: Only check recent events that could potentially overlap
-                                # with the current event. We iterate backwards and stop once we've gone
-                                # far enough back that no note could possibly still be sounding.
+                                # with the current event. We iterate backwards and find the furthest
+                                # back event that could still have notes overlapping with current event.
                                 checked_pitches = set()
                                 current_offset = float(current_event.offset)
 
+                                if args.debug_held_notes:
+                                    print(f"[DEBUG] Checking held notes at event {current_event_idx} (offset {current_offset})")
+
+                                # Find the earliest event we need to check by looking for the
+                                # earliest offset that could still have a note sounding at current_offset
+                                earliest_relevant_idx = 0
                                 for prev_idx in range(current_event_idx - 1, -1, -1):
                                     prev_event = events[prev_idx]
                                     prev_end_offset = float(prev_event.offset + prev_event.duration)
-
-                                    # Stop looking back if this event ended before the current event started
-                                    # and we've already found some pitches to check
-                                    if prev_end_offset <= current_offset and checked_pitches:
+                                    # If this event ends before or at the current event start,
+                                    # no event before this one can overlap either
+                                    if prev_end_offset <= current_offset:
+                                        earliest_relevant_idx = prev_idx + 1
                                         break
+
+                                if args.debug_held_notes:
+                                    print(f"[DEBUG] Scanning events {earliest_relevant_idx} to {current_event_idx - 1}")
+
+                                for prev_idx in range(earliest_relevant_idx, current_event_idx):
+                                    prev_event = events[prev_idx]
+                                    prev_end_offset = float(prev_event.offset + prev_event.duration)
 
                                     for prev_pitch in prev_event.pitches:
                                         # Ne vérifier chaque pitch qu'une seule fois
                                         if prev_pitch not in checked_pitches:
                                             checked_pitches.add(prev_pitch)
-                                            if should_note_be_held(prev_pitch, current_event_idx):
-                                                if prev_pitch not in currently_pressed:
-                                                    missing_held_notes.append(prev_pitch)
+                                            should_be_held = should_note_be_held(prev_pitch, current_event_idx)
+                                            is_pressed = prev_pitch in currently_pressed
+
+                                            if args.debug_held_notes:
+                                                print(f"[DEBUG]   Pitch {midi_to_french(prev_pitch)}: should_be_held={should_be_held}, is_pressed={is_pressed}")
+
+                                            if should_be_held and not is_pressed:
+                                                missing_held_notes.append(prev_pitch)
+                                                if args.debug_held_notes:
+                                                    print(f"[DEBUG]   -> MISSING: {midi_to_french(prev_pitch)}")
+
 
                             if missing_held_notes:
                                 if args.sound:
