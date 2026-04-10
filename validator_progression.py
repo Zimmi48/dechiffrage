@@ -46,6 +46,10 @@ chord_start_time = None
 chord_wrong_notes = []  # Wrong notes played during the current chord window
 CHORD_WINDOW = 0.5
 SEQUENTIAL_NOTE_MIN_DELAY = 0.1  # Minimum delay (in seconds) between sequential notes
+# Minimum overlap (in quarter notes) for a note to be considered "held" past the next event.
+# Prevents spurious warnings from floating-point errors and barline edge cases.
+# Must be smaller than the finest practical subdivision (128th note ≈ 0.03 qn).
+HELD_NOTE_OVERLAP_TOLERANCE = 0.01
 notes_should_be_held = {}
 last_note_time = None  # Timestamp when the last event was completed
 
@@ -123,12 +127,11 @@ def should_note_be_held(pitch, current_idx):
             return False
 
         # A note should be held if it ends strictly after the start of the next event.
-        # Use a musically meaningful tolerance (0.01 quarter notes) rather than a
-        # bare floating-point epsilon. This prevents spurious warnings from:
+        # Use a musically meaningful tolerance rather than a bare floating-point epsilon.
+        # This prevents spurious warnings from:
         # - Floating-point errors in offset/duration calculations after expandRepeats()
         # - Notes that end exactly at the barline with tiny numerical discrepancies
-        # 0.01 qn is well below the smallest practical subdivision (128th note ≈ 0.03 qn).
-        return note_end_offset > current_offset + 0.01
+        return note_end_offset > current_offset + HELD_NOTE_OVERLAP_TOLERANCE
 
     return False
 
@@ -429,10 +432,10 @@ def main():
                                 # Each repeat section starts fresh - notes from the
                                 # previous pass should not trigger held warnings.
                                 for boundary in repeat_boundaries:
-                                    if current_offset >= boundary - 0.01:
+                                    if current_offset >= boundary - HELD_NOTE_OVERLAP_TOLERANCE:
                                         # Move earliest_relevant_idx past the boundary
                                         for idx in range(earliest_relevant_idx, current_event_idx):
-                                            if float(events[idx].offset) >= boundary - 0.01:
+                                            if float(events[idx].offset) >= boundary - HELD_NOTE_OVERLAP_TOLERANCE:
                                                 earliest_relevant_idx = idx
                                                 break
                                         else:
