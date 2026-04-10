@@ -19,12 +19,19 @@ def midi_to_french(pitch: int) -> str:
 # duration: durée en quarter notes
 # offset: position temporelle
 class MusicEvent:
-    def __init__(self, event_type, pitches, duration, offset, measure_num):
+    def __init__(self, event_type, pitches, duration, offset, measure_num, pitch_durations=None):
         self.type = event_type  # 'note' or 'chord'
         self.pitches = pitches  # list of MIDI pitches
-        self.duration = duration  # quarterLength
+        self.duration = duration  # quarterLength (max across all pitches)
         self.offset = offset  # temporal position
         self.measure = measure_num
+        self.pitch_durations = pitch_durations  # {pitch: duration} or None if all same
+
+    def get_pitch_duration(self, pitch):
+        """Get the duration for a specific pitch in this event."""
+        if self.pitch_durations is not None and pitch in self.pitch_durations:
+            return self.pitch_durations[pitch]
+        return self.duration
 
     def __repr__(self):
         pitch_names = ", ".join(midi_to_french(p) for p in self.pitches)
@@ -73,12 +80,18 @@ def merge_events(events):
         max_duration = max(pitch_to_max_duration[p] for p in all_pitches)
         first_event = same_offset_events[0]
 
+        # Store per-pitch durations when pitches have different durations
+        all_durations = set(pitch_to_max_duration.values())
+        pitch_durations = dict(pitch_to_max_duration) if len(all_durations) > 1 else None
+
         if len(all_pitches) == 1:
             merged_events.append(MusicEvent('note', all_pitches, max_duration,
-                                           first_event.offset, first_event.measure))
+                                           first_event.offset, first_event.measure,
+                                           pitch_durations=pitch_durations))
         else:
             merged_events.append(MusicEvent('chord', all_pitches, max_duration,
-                                           first_event.offset, first_event.measure))
+                                           first_event.offset, first_event.measure,
+                                           pitch_durations=pitch_durations))
         i = j
     return merged_events
 
@@ -100,7 +113,7 @@ def should_note_be_held(pitch, current_idx):
     if current_idx < len(events):
         current_event = events[current_idx]
         current_offset = float(current_event.offset)
-        note_end_offset = float(last_event.offset + last_event.duration)
+        note_end_offset = float(last_event.offset + last_event.get_pitch_duration(pitch))
         last_offset = float(last_event.offset)
 
         # Si les deux événements commencent au même moment, pas de warning
@@ -220,6 +233,9 @@ def main():
     events.sort(key=lambda e: e.offset)
 
     events = merge_events(events)
+
+    # Precompute the maximum event duration for the held note scan optimization
+    max_event_duration = max(float(e.duration) for e in events) if events else 0
 
     print(f"{len(events)} événements musicaux détectés (notes et accords).")
     if events:
@@ -378,14 +394,15 @@ def main():
                                     print(f"[DEBUG] Checking held notes at event {current_event_idx} (offset {current_offset})")
 
                                 # Find the earliest event we need to check by looking for the
-                                # earliest offset that could still have a note sounding at current_offset
+                                # earliest offset that could still have a note sounding at current_offset.
+                                # Use max_event_duration to ensure we don't skip long-duration events
+                                # that might still overlap even if shorter events between them don't.
                                 earliest_relevant_idx = 0
                                 for prev_idx in range(current_event_idx - 1, -1, -1):
                                     prev_event = events[prev_idx]
-                                    prev_end_offset = float(prev_event.offset + prev_event.duration)
-                                    # If this event ends before or at the current event start,
-                                    # no event before this one can overlap either
-                                    if prev_end_offset <= current_offset:
+                                    # If this event starts so far back that even the longest note
+                                    # in the piece couldn't reach the current offset, stop scanning
+                                    if float(prev_event.offset) + max_event_duration < current_offset:
                                         earliest_relevant_idx = prev_idx + 1
                                         break
 
@@ -404,7 +421,10 @@ def main():
                                             is_pressed = prev_pitch in currently_pressed
 
                                             if args.debug_held_notes:
-                                                print(f"[DEBUG]   Pitch {midi_to_french(prev_pitch)}: should_be_held={should_be_held}, is_pressed={is_pressed}")
+                                                pitch_dur = prev_event.get_pitch_duration(prev_pitch)
+                                                event_dur = prev_event.duration
+                                                dur_info = f" (pitch_dur={pitch_dur:.2f}, event_dur={event_dur:.2f})" if pitch_dur != event_dur else ""
+                                                print(f"[DEBUG]   Pitch {midi_to_french(prev_pitch)}: should_be_held={should_be_held}, is_pressed={is_pressed}{dur_info}")
 
                                             if should_be_held and not is_pressed:
                                                 missing_held_notes.append(prev_pitch)

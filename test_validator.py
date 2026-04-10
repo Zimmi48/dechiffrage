@@ -341,6 +341,75 @@ class TestShouldNoteBeHeld(unittest.TestCase):
         self.assertTrue(should_note_be_held(60, 2),
                        "Long note C4 should be held at event 2 even though shorter note D4 ended earlier")
 
+    def test_merged_event_per_pitch_durations(self):
+        """Test that merged events with different per-pitch durations don't cause spurious warnings.
+
+        This is a regression test for the bug where both hands merged at the same offset
+        would assign the max duration to all pitches. A short right-hand note (e.g., 0.5 beats)
+        merged with a long left-hand note (e.g., 4.0 beats) would make should_note_be_held
+        incorrectly report the short note as needing to be held for 4.0 beats.
+        """
+        from validator_progression import MusicEvent, should_note_be_held, merge_events
+        import validator_progression
+
+        # Simulate both hands: right hand has short note, left hand has long note
+        right_hand_event = MusicEvent('note', [60], 0.5, 0.0, 1)  # C4: short (0.5 beats)
+        left_hand_event = MusicEvent('note', [40], 4.0, 0.0, 1)   # E2: long (4 beats)
+
+        # Merge them (simulating --hand both)
+        merged = merge_events([right_hand_event, left_hand_event])
+
+        # Verify merge preserved per-pitch durations
+        self.assertEqual(len(merged), 1)
+        merged_event = merged[0]
+        self.assertIsNotNone(merged_event.pitch_durations, "Merged event should have per-pitch durations")
+        self.assertAlmostEqual(merged_event.get_pitch_duration(60), 0.5)
+        self.assertAlmostEqual(merged_event.get_pitch_duration(40), 4.0)
+
+        # Create events list with merged event and a later event
+        events = merged + [MusicEvent('note', [62], 1.0, 2.0, 1)]  # D4 at offset 2
+
+        validator_progression.events = events
+
+        # At event 1 (D4 at offset 2):
+        # - C4 had duration 0.5, ending at 0.5 -> should NOT be held
+        # - E2 had duration 4.0, ending at 4.0 -> SHOULD be held
+        self.assertFalse(should_note_be_held(60, 1),
+                        "C4 should NOT be held - its per-pitch duration is 0.5, ending at 0.5 < 2.0")
+        self.assertTrue(should_note_be_held(40, 1),
+                       "E2 SHOULD be held - its per-pitch duration is 4.0, ending at 4.0 > 2.0")
+
+    def test_merged_event_same_durations_no_pitch_durations(self):
+        """Test that merged events with identical per-pitch durations don't set pitch_durations."""
+        from validator_progression import MusicEvent, merge_events
+
+        # Both hands have the same duration
+        right_hand = MusicEvent('note', [60], 1.0, 0.0, 1)  # C4: 1 beat
+        left_hand = MusicEvent('note', [40], 1.0, 0.0, 1)   # E2: 1 beat
+
+        merged = merge_events([right_hand, left_hand])
+
+        self.assertEqual(len(merged), 1)
+        # pitch_durations should be None when all durations are the same
+        self.assertIsNone(merged[0].pitch_durations)
+
+    def test_get_pitch_duration_without_pitch_durations(self):
+        """Test that get_pitch_duration falls back to event duration when no pitch_durations set."""
+        from validator_progression import MusicEvent
+
+        event = MusicEvent('chord', [60, 64, 67], 2.0, 0.0, 1)
+        self.assertAlmostEqual(event.get_pitch_duration(60), 2.0)
+        self.assertAlmostEqual(event.get_pitch_duration(64), 2.0)
+
+    def test_get_pitch_duration_with_pitch_durations(self):
+        """Test that get_pitch_duration returns correct per-pitch duration."""
+        from validator_progression import MusicEvent
+
+        pitch_durations = {60: 0.5, 40: 4.0}
+        event = MusicEvent('chord', [60, 40], 4.0, 0.0, 1, pitch_durations=pitch_durations)
+        self.assertAlmostEqual(event.get_pitch_duration(60), 0.5)
+        self.assertAlmostEqual(event.get_pitch_duration(40), 4.0)
+
 
 
 class TestFormatEvent(unittest.TestCase):
