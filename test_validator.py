@@ -410,6 +410,82 @@ class TestShouldNoteBeHeld(unittest.TestCase):
         self.assertAlmostEqual(event.get_pitch_duration(60), 0.5)
         self.assertAlmostEqual(event.get_pitch_duration(40), 4.0)
 
+    def test_repeat_boundary_no_spurious_held_note_warnings(self):
+        """Test that notes from before a repeat boundary don't trigger held note warnings.
+
+        This is a regression test for the bug where notes from the last bar of the
+        first pass would spuriously trigger held note warnings at the first bar of the
+        second pass. This happens because at the repeat boundary, note end offsets may
+        be very close to the current event offset due to floating-point arithmetic,
+        and the previous tolerance (1e-9) was too tight to filter them out.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Simulate a 9-bar waltz in 3/4 time with a repeat
+        # Bar 9 (first pass, offset 24-27): dotted half note G#2 + quarter notes
+        # Bar 10 (second pass = bar 1 repeated, offset 27): chord G#1 + G#2
+        events = [
+            # Last few events of first pass (bar 9)
+            MusicEvent('chord', [44, 32], 3.0, 24.0, 9),   # G#2+G#1 dotted half
+            MusicEvent('note', [63], 0.5, 25.5, 9),          # D#4 eighth
+            MusicEvent('note', [59], 1.0, 26.0, 9),           # B3 quarter, ends at 27.0
+            # First event of second pass (bar 10 = bar 1 repeated)
+            MusicEvent('chord', [44, 32], 3.0, 27.0, 10),
+        ]
+        validator_progression.events = events
+
+        # At the repeat boundary, no notes from bar 9 should require holding
+        # B3 ends at exactly 27.0, G#2+G#1 ends at exactly 27.0
+        self.assertFalse(should_note_be_held(59, 3),
+                        "B3 from bar 9 should NOT be held at bar 10 (ends exactly at boundary)")
+        self.assertFalse(should_note_be_held(44, 3),
+                        "G#2 from bar 9 should NOT be held at bar 10 (ends exactly at boundary)")
+        self.assertFalse(should_note_be_held(32, 3),
+                        "G#1 from bar 9 should NOT be held at bar 10 (ends exactly at boundary)")
+
+    def test_repeat_boundary_fp_error_no_spurious_warning(self):
+        """Test that tiny floating-point errors at the repeat boundary don't cause warnings.
+
+        When expandRepeats() shifts offsets, tiny FP discrepancies can make the second
+        pass start at an offset like 26.9999999 instead of 27.0. This should not cause
+        notes ending at exactly 27.0 to appear as "held."
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Simulate FP error: second pass offset slightly before exact boundary
+        events = [
+            MusicEvent('note', [59], 1.0, 26.0, 9),           # B3: ends at 27.0
+            MusicEvent('chord', [44, 32], 3.0, 27.0 - 1e-7, 10),  # Tiny FP error in offset
+        ]
+        validator_progression.events = events
+
+        # B3 ends at 27.0, current offset is 26.9999999
+        # Overlap = 27.0 - 26.9999999 = 1e-7, which is < 0.01 tolerance
+        self.assertFalse(should_note_be_held(59, 1),
+                        "B3 should NOT be held despite tiny FP offset error at repeat boundary")
+
+    def test_genuine_held_note_still_detected(self):
+        """Test that genuine held notes are still detected with the increased tolerance.
+
+        A note with significant overlap (>= 0.125 quarter notes, i.e., at least a 32nd
+        note) should still trigger a held note warning.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 2.0, 0.0, 1),   # C4: offset 0, duration 2.0, ends at 2.0
+            MusicEvent('note', [62], 1.0, 1.0, 1),   # D4: offset 1, duration 1
+        ]
+        validator_progression.events = events
+
+        # C4 extends 1.0 beats past D4's start (2.0 - 1.0 = 1.0 overlap)
+        # This is well above the 0.01 tolerance, so it should be detected
+        self.assertTrue(should_note_be_held(60, 1),
+                       "C4 should be held - it has 1.0 beat of overlap (well above 0.01 tolerance)")
+
 
 
 class TestFormatEvent(unittest.TestCase):

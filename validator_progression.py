@@ -122,9 +122,13 @@ def should_note_be_held(pitch, current_idx):
         if abs(last_offset - current_offset) < 1e-9:
             return False
 
-        # Une note doit être tenue si elle se termine strictement après le début de l'événement suivant
-        # Utiliser une tolérance pour éviter les problèmes d'arrondissement
-        return note_end_offset > current_offset + 1e-9
+        # A note should be held if it ends strictly after the start of the next event.
+        # Use a musically meaningful tolerance (0.01 quarter notes) rather than a
+        # bare floating-point epsilon. This prevents spurious warnings from:
+        # - Floating-point errors in offset/duration calculations after expandRepeats()
+        # - Notes that end exactly at the barline with tiny numerical discrepancies
+        # 0.01 qn is well below the smallest practical subdivision (128th note ≈ 0.03 qn).
+        return note_end_offset > current_offset + 0.01
 
     return False
 
@@ -200,9 +204,24 @@ def main():
     score = converter.parse(args.xml_file)
 
     # Expand repeats if requested
+    # When expanding, record the original score duration to detect repeat boundaries.
+    # Notes from before a repeat boundary should not trigger held note warnings
+    # for events after the boundary (each repeat section starts "fresh").
+    repeat_boundaries = []
     if args.repeats:
         print("Expansion des répétitions...")
+        # Compute the repeat section boundary: the highest time in the original score
+        # marks where the first pass ends and the second pass begins.
+        original_highest_time = max(
+            float(p.flatten().highestTime) for p in score.parts
+        )
         score = score.expandRepeats()
+        # Compute repeat boundaries as multiples of the original duration
+        expanded_highest_time = max(
+            float(p.flatten().highestTime) for p in score.parts
+        )
+        num_passes = round(expanded_highest_time / original_highest_time) if original_highest_time > 0 else 1
+        repeat_boundaries = [original_highest_time * i for i in range(1, num_passes)]
 
     # Parts: index 0 = right hand, index 1 = left hand (standard grand staff)
     if args.hand == "right":
@@ -406,8 +425,24 @@ def main():
                                         earliest_relevant_idx = prev_idx + 1
                                         break
 
+                                # Don't check held notes across repeat boundaries.
+                                # Each repeat section starts fresh - notes from the
+                                # previous pass should not trigger held warnings.
+                                for boundary in repeat_boundaries:
+                                    if current_offset >= boundary - 0.01:
+                                        # Move earliest_relevant_idx past the boundary
+                                        for idx in range(earliest_relevant_idx, current_event_idx):
+                                            if float(events[idx].offset) >= boundary - 0.01:
+                                                earliest_relevant_idx = idx
+                                                break
+                                        else:
+                                            # All events in scan range are before the boundary;
+                                            # skip them all since they belong to a previous section.
+                                            earliest_relevant_idx = current_event_idx
+
                                 if args.debug_held_notes:
-                                    print(f"[DEBUG] Scanning events {earliest_relevant_idx} to {current_event_idx - 1}")
+                                    boundary_info = f" (repeat boundaries: {repeat_boundaries})" if repeat_boundaries else ""
+                                    print(f"[DEBUG] Scanning events {earliest_relevant_idx} to {current_event_idx - 1}{boundary_info}")
 
                                 for prev_idx in range(earliest_relevant_idx, current_event_idx):
                                     prev_event = events[prev_idx]
