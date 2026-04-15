@@ -486,6 +486,73 @@ class TestShouldNoteBeHeld(unittest.TestCase):
         self.assertTrue(should_note_be_held(60, 1),
                        "C4 should be held - it has 1.0 beat of overlap (well above 0.01 tolerance)")
 
+    def test_repeat_boundary_second_bar_of_second_repeat(self):
+        """Test that notes from the first repeat don't trigger warnings in later bars of second repeat.
+
+        This is a regression test for the bug where the repeat boundary check incorrectly
+        skipped events at and after the boundary, rather than skipping events before it.
+
+        Simulates a piece with measures 1-9 repeated:
+        - First pass: measures 1-9 (offsets 0-27)
+        - Second pass: measures 1-9 again (offsets 27-54)
+
+        The bug manifested when checking held notes at bars 2, 3, etc. of the second repeat.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Simulate a waltz with repeat (3/4 time, 3 beats per bar)
+        # First pass: bars 1-3 (offsets 0-9)
+        # Second pass: bars 1-3 repeated (offsets 9-18)
+        events = [
+            # First pass - bar 1 (offset 0-3)
+            MusicEvent('chord', [44, 32], 3.0, 0.0, 1),    # G#2+G#1 dotted half
+            MusicEvent('note', [63], 1.0, 1.5, 1),          # D#4 quarter
+            MusicEvent('note', [59], 0.5, 2.5, 1),          # B3 eighth
+
+            # First pass - bar 2 (offset 3-6)
+            MusicEvent('chord', [44, 32], 3.0, 3.0, 2),    # G#2+G#1 dotted half
+            MusicEvent('note', [65], 1.0, 4.5, 2),          # F4 quarter
+            MusicEvent('note', [61], 0.5, 5.5, 2),          # C#4 eighth
+
+            # First pass - bar 3 (offset 6-9)
+            MusicEvent('chord', [44, 32], 3.0, 6.0, 3),    # G#2+G#1 dotted half
+            MusicEvent('note', [63], 1.0, 7.5, 3),          # D#4 quarter
+            MusicEvent('note', [59], 0.5, 8.5, 3),          # B3 eighth, ends at 9.0
+
+            # Second pass - bar 1 repeated (offset 9-12)
+            MusicEvent('chord', [44, 32], 3.0, 9.0, 4),    # G#2+G#1 dotted half
+            MusicEvent('note', [63], 1.0, 10.5, 4),         # D#4 quarter
+            MusicEvent('note', [59], 0.5, 11.5, 4),         # B3 eighth
+
+            # Second pass - bar 2 repeated (offset 12-15) - THIS IS WHERE BUG OCCURRED
+            MusicEvent('chord', [44, 32], 3.0, 12.0, 5),   # G#2+G#1 dotted half
+            MusicEvent('note', [65], 1.0, 13.5, 5),         # F4 quarter
+            MusicEvent('note', [61], 0.5, 14.5, 5),         # C#4 eighth
+        ]
+        validator_progression.events = events
+
+        # Simulate repeat_boundaries being set (first pass ends at offset 9.0)
+        validator_progression.repeat_boundaries = [9.0]
+
+        # At bar 2 of second repeat (event index 12, offset 12.0),
+        # notes from bar 2 of first repeat should NOT be flagged as needing to be held
+        # because they're on the other side of the repeat boundary.
+
+        # G#2 from first-pass bar 2 ends at 6.0, should NOT be held at second-pass bar 2 (offset 12.0)
+        self.assertFalse(should_note_be_held(44, 12),
+                        "G#2 from first-pass bar 2 should NOT be held at second-pass bar 2")
+
+        # F4 from first-pass bar 2 ends at 5.5, should NOT be held at second-pass bar 2 (offset 12.0)
+        # Note: checking at event 13 (F4 at offset 13.5) to see if F4 from first pass should be held
+        self.assertFalse(should_note_be_held(65, 13),
+                        "F4 from first-pass bar 2 should NOT be held at second-pass bar 2 F4")
+
+        # But G#2 from second-pass bar 1 ends at 12.0, should NOT be held at second-pass bar 2
+        # (ends exactly at boundary, within tolerance)
+        self.assertFalse(should_note_be_held(44, 12),
+                        "G#2 from second-pass bar 1 should NOT be held at second-pass bar 2 (ends at boundary)")
+
 
 
 class TestFormatEvent(unittest.TestCase):

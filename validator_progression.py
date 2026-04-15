@@ -52,6 +52,7 @@ SEQUENTIAL_NOTE_MIN_DELAY = 0.1  # Minimum delay (in seconds) between sequential
 HELD_NOTE_OVERLAP_TOLERANCE = 0.01
 notes_should_be_held = {}
 last_note_time = None  # Timestamp when the last event was completed
+repeat_boundaries = []  # Offsets where repeat sections begin (populated when --repeats is used)
 
 
 def merge_events(events):
@@ -126,6 +127,17 @@ def should_note_be_held(pitch, current_idx):
         if abs(last_offset - current_offset) < 1e-9:
             return False
 
+        # Check if there's a repeat boundary between the last occurrence and current event.
+        # If so, don't require the note to be held across the boundary.
+        # Each repeat section starts fresh - notes from before the boundary should not
+        # trigger held warnings for events after the boundary.
+        for boundary in repeat_boundaries:
+            # If last event is before boundary and current event is at/after boundary,
+            # the note should not be held across this boundary
+            if (last_offset < boundary - HELD_NOTE_OVERLAP_TOLERANCE and
+                current_offset >= boundary - HELD_NOTE_OVERLAP_TOLERANCE):
+                return False
+
         # A note should be held if it ends strictly after the start of the next event.
         # Use a musically meaningful tolerance rather than a bare floating-point epsilon.
         # This prevents spurious warnings from:
@@ -176,7 +188,7 @@ def play_warning_sound():
 
 def main():
     """Main function to run the MIDI validator"""
-    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, chord_wrong_notes, notes_should_be_held, last_note_time
+    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, chord_wrong_notes, notes_should_be_held, last_note_time, repeat_boundaries
 
     parser = argparse.ArgumentParser(description="MIDI piano validator")
     parser.add_argument("xml_file", help="Path to the MusicXML file")
@@ -203,6 +215,9 @@ def main():
     )
     args = parser.parse_args()
 
+    # Reset global state
+    repeat_boundaries.clear()
+
     print("Chargement de la partition...")
     score = converter.parse(args.xml_file)
 
@@ -210,7 +225,6 @@ def main():
     # When expanding, record the original score duration to detect repeat boundaries.
     # Notes from before a repeat boundary should not trigger held note warnings
     # for events after the boundary (each repeat section starts "fresh").
-    repeat_boundaries = []
     if args.repeats:
         print("Expansion des répétitions...")
         # Compute the repeat section boundary: the highest time in the original score
@@ -414,6 +428,8 @@ def main():
 
                                 if args.debug_held_notes:
                                     print(f"[DEBUG] Checking held notes at event {current_event_idx} (offset {current_offset})")
+                                    if repeat_boundaries:
+                                        print(f"[DEBUG] Repeat boundaries: {repeat_boundaries}")
 
                                 # Find the earliest event we need to check by looking for the
                                 # earliest offset that could still have a note sounding at current_offset.
@@ -428,24 +444,8 @@ def main():
                                         earliest_relevant_idx = prev_idx + 1
                                         break
 
-                                # Don't check held notes across repeat boundaries.
-                                # Each repeat section starts fresh - notes from the
-                                # previous pass should not trigger held warnings.
-                                for boundary in repeat_boundaries:
-                                    if current_offset >= boundary - HELD_NOTE_OVERLAP_TOLERANCE:
-                                        # Move earliest_relevant_idx past the boundary
-                                        for idx in range(earliest_relevant_idx, current_event_idx):
-                                            if float(events[idx].offset) >= boundary - HELD_NOTE_OVERLAP_TOLERANCE:
-                                                earliest_relevant_idx = idx
-                                                break
-                                        else:
-                                            # All events in scan range are before the boundary;
-                                            # skip them all since they belong to a previous section.
-                                            earliest_relevant_idx = current_event_idx
-
                                 if args.debug_held_notes:
-                                    boundary_info = f" (repeat boundaries: {repeat_boundaries})" if repeat_boundaries else ""
-                                    print(f"[DEBUG] Scanning events {earliest_relevant_idx} to {current_event_idx - 1}{boundary_info}")
+                                    print(f"[DEBUG] Scanning events {earliest_relevant_idx} to {current_event_idx - 1}")
 
                                 for prev_idx in range(earliest_relevant_idx, current_event_idx):
                                     prev_event = events[prev_idx]
