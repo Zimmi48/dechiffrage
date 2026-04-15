@@ -100,7 +100,7 @@ def merge_events(events):
         i = j
     return merged_events
 
-def should_note_be_held(pitch, current_idx):
+def should_note_be_held(pitch, current_idx, debug=False):
     """Détermine si une note devrait encore être tenue basé sur les événements précédents."""
     # Chercher la dernière occurrence de cette note avant l'événement actuel
     last_occurrence_idx = None
@@ -136,6 +136,10 @@ def should_note_be_held(pitch, current_idx):
             # the note should not be held across this boundary
             if (last_offset < boundary - HELD_NOTE_OVERLAP_TOLERANCE and
                 current_offset >= boundary - HELD_NOTE_OVERLAP_TOLERANCE):
+                if debug:
+                    print(f"[DEBUG]     -> Skipping across repeat boundary at {boundary}")
+                    print(f"[DEBUG]        last_offset={last_offset:.4f} < {boundary - HELD_NOTE_OVERLAP_TOLERANCE:.4f}")
+                    print(f"[DEBUG]        current_offset={current_offset:.4f} >= {boundary - HELD_NOTE_OVERLAP_TOLERANCE:.4f}")
                 return False
 
         # A note should be held if it ends strictly after the start of the next event.
@@ -143,7 +147,12 @@ def should_note_be_held(pitch, current_idx):
         # This prevents spurious warnings from:
         # - Floating-point errors in offset/duration calculations after expandRepeats()
         # - Notes that end exactly at the barline with tiny numerical discrepancies
-        return note_end_offset > current_offset + HELD_NOTE_OVERLAP_TOLERANCE
+        overlap = note_end_offset > current_offset + HELD_NOTE_OVERLAP_TOLERANCE
+        if debug and overlap:
+            print(f"[DEBUG]     -> Note overlaps: end={note_end_offset:.4f} > current={current_offset:.4f} + tolerance={HELD_NOTE_OVERLAP_TOLERANCE}")
+            print(f"[DEBUG]        Last event idx={last_occurrence_idx}, offset={last_offset:.4f}, measure={last_event.measure}")
+            print(f"[DEBUG]        Current event idx={current_idx}, offset={current_offset:.4f}, measure={current_event.measure}")
+        return overlap
 
     return False
 
@@ -455,7 +464,7 @@ def main():
                                         # Ne vérifier chaque pitch qu'une seule fois
                                         if prev_pitch not in checked_pitches:
                                             checked_pitches.add(prev_pitch)
-                                            should_be_held = should_note_be_held(prev_pitch, current_event_idx)
+                                            should_be_held = should_note_be_held(prev_pitch, current_event_idx, debug=args.debug_held_notes)
                                             is_pressed = prev_pitch in currently_pressed
 
                                             if args.debug_held_notes:
