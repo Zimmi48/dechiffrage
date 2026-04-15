@@ -231,23 +231,42 @@ def main():
     score = converter.parse(args.xml_file)
 
     # Expand repeats if requested
-    # When expanding, record the original score duration to detect repeat boundaries.
+    # When expanding, detect repeat boundaries by looking for where measure numbers
+    # decrease (e.g., measure 8 -> measure 1), which indicates the start of a repeated section.
     # Notes from before a repeat boundary should not trigger held note warnings
     # for events after the boundary (each repeat section starts "fresh").
     if args.repeats:
         print("Expansion des répétitions...")
-        # Compute the repeat section boundary: the highest time in the original score
-        # marks where the first pass ends and the second pass begins.
-        original_highest_time = max(
-            float(p.flatten().highestTime) for p in score.parts
-        )
         score = score.expandRepeats()
-        # Compute repeat boundaries as multiples of the original duration
-        expanded_highest_time = max(
-            float(p.flatten().highestTime) for p in score.parts
-        )
-        num_passes = round(expanded_highest_time / original_highest_time) if original_highest_time > 0 else 1
-        repeat_boundaries = [original_highest_time * i for i in range(1, num_passes)]
+
+        # Detect repeat boundaries by finding where measure numbers decrease
+        # after expanding repeats. This handles partial repeats correctly.
+        measure_events = []
+        for part in score.parts:
+            flat = part.flatten()
+            for el in flat.notesAndRests:
+                measure = el.measureNumber if hasattr(el, 'measureNumber') else None
+                if measure is not None:
+                    measure_events.append((float(el.offset), measure))
+
+        # Sort by offset and remove duplicate (offset, measure) pairs
+        measure_events.sort()
+        seen = set()
+        unique_measure_events = []
+        for offset, measure in measure_events:
+            key = (offset, measure)
+            if key not in seen:
+                seen.add(key)
+                unique_measure_events.append((offset, measure))
+
+        # Find offsets where measure number decreases (repeat boundaries)
+        prev_measure = 0
+        for offset, measure in unique_measure_events:
+            if measure < prev_measure:
+                # Measure number decreased - this is a repeat boundary
+                repeat_boundaries.append(offset)
+                print(f"  Détection de frontière de répétition à l'offset {offset:.2f} (mesure {prev_measure} -> {measure})")
+            prev_measure = measure
 
     # Parts: index 0 = right hand, index 1 = left hand (standard grand staff)
     if args.hand == "right":
