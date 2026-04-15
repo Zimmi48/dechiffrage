@@ -19,12 +19,19 @@ def midi_to_french(pitch: int) -> str:
 # duration: durée en quarter notes
 # offset: position temporelle
 class MusicEvent:
-    def __init__(self, event_type, pitches, duration, offset, measure_num):
+    def __init__(self, event_type, pitches, duration, offset, measure_num, pitch_durations=None):
         self.type = event_type  # 'note' or 'chord'
         self.pitches = pitches  # list of MIDI pitches
-        self.duration = duration  # quarterLength
+        self.duration = duration  # quarterLength (max across all pitches)
         self.offset = offset  # temporal position
         self.measure = measure_num
+        self.pitch_durations = pitch_durations  # {pitch: duration} or None if all same
+
+    def get_pitch_duration(self, pitch):
+        """Get the duration for a specific pitch in this event."""
+        if self.pitch_durations is not None and pitch in self.pitch_durations:
+            return self.pitch_durations[pitch]
+        return self.duration
 
     def __repr__(self):
         pitch_names = ", ".join(midi_to_french(p) for p in self.pitches)
@@ -39,8 +46,13 @@ chord_start_time = None
 chord_wrong_notes = []  # Wrong notes played during the current chord window
 CHORD_WINDOW = 0.5
 SEQUENTIAL_NOTE_MIN_DELAY = 0.1  # Minimum delay (in seconds) between sequential notes
+# Minimum overlap (in quarter notes) for a note to be considered "held" past the next event.
+# Prevents spurious warnings from floating-point errors and barline edge cases.
+# Must be smaller than the finest practical subdivision (128th note ≈ 0.03 qn).
+HELD_NOTE_OVERLAP_TOLERANCE = 0.01
 notes_should_be_held = {}
 last_note_time = None  # Timestamp when the last event was completed
+repeat_boundaries = []  # Offsets where repeat sections begin (populated when --repeats is used)
 
 
 def merge_events(events):
@@ -73,16 +85,22 @@ def merge_events(events):
         max_duration = max(pitch_to_max_duration[p] for p in all_pitches)
         first_event = same_offset_events[0]
 
+        # Store per-pitch durations when pitches have different durations
+        all_durations = set(pitch_to_max_duration.values())
+        pitch_durations = dict(pitch_to_max_duration) if len(all_durations) > 1 else None
+
         if len(all_pitches) == 1:
             merged_events.append(MusicEvent('note', all_pitches, max_duration,
-                                           first_event.offset, first_event.measure))
+                                           first_event.offset, first_event.measure,
+                                           pitch_durations=pitch_durations))
         else:
             merged_events.append(MusicEvent('chord', all_pitches, max_duration,
-                                           first_event.offset, first_event.measure))
+                                           first_event.offset, first_event.measure,
+                                           pitch_durations=pitch_durations))
         i = j
     return merged_events
 
-def should_note_be_held(pitch, current_idx):
+def should_note_be_held(pitch, current_idx, debug=False):
     """Détermine si une note devrait encore être tenue basé sur les événements précédents."""
     # Chercher la dernière occurrence de cette note avant l'événement actuel
     last_occurrence_idx = None
@@ -100,7 +118,7 @@ def should_note_be_held(pitch, current_idx):
     if current_idx < len(events):
         current_event = events[current_idx]
         current_offset = float(current_event.offset)
-        note_end_offset = float(last_event.offset + last_event.duration)
+        note_end_offset = float(last_event.offset + last_event.get_pitch_duration(pitch))
         last_offset = float(last_event.offset)
 
         # Si les deux événements commencent au même moment, pas de warning
@@ -109,9 +127,32 @@ def should_note_be_held(pitch, current_idx):
         if abs(last_offset - current_offset) < 1e-9:
             return False
 
-        # Une note doit être tenue si elle se termine strictement après le début de l'événement suivant
-        # Utiliser une tolérance pour éviter les problèmes d'arrondissement
-        return note_end_offset > current_offset + 1e-9
+        # Check if there's a repeat boundary between the last occurrence and current event.
+        # If so, don't require the note to be held across the boundary.
+        # Each repeat section starts fresh - notes from before the boundary should not
+        # trigger held warnings for events after the boundary.
+        for boundary in repeat_boundaries:
+            # If last event is before boundary and current event is at/after boundary,
+            # the note should not be held across this boundary
+            if (last_offset < boundary - HELD_NOTE_OVERLAP_TOLERANCE and
+                current_offset >= boundary - HELD_NOTE_OVERLAP_TOLERANCE):
+                if debug:
+                    print(f"[DEBUG]     -> Skipping across repeat boundary at {boundary}")
+                    print(f"[DEBUG]        last_offset={last_offset:.4f} < {boundary - HELD_NOTE_OVERLAP_TOLERANCE:.4f}")
+                    print(f"[DEBUG]        current_offset={current_offset:.4f} >= {boundary - HELD_NOTE_OVERLAP_TOLERANCE:.4f}")
+                return False
+
+        # A note should be held if it ends strictly after the start of the next event.
+        # Use a musically meaningful tolerance rather than a bare floating-point epsilon.
+        # This prevents spurious warnings from:
+        # - Floating-point errors in offset/duration calculations after expandRepeats()
+        # - Notes that end exactly at the barline with tiny numerical discrepancies
+        overlap = note_end_offset > current_offset + HELD_NOTE_OVERLAP_TOLERANCE
+        if debug and overlap:
+            print(f"[DEBUG]     -> Note overlaps: end={note_end_offset:.4f} > current={current_offset:.4f} + tolerance={HELD_NOTE_OVERLAP_TOLERANCE}")
+            print(f"[DEBUG]        Last event idx={last_occurrence_idx}, offset={last_offset:.4f}, measure={last_event.measure}")
+            print(f"[DEBUG]        Current event idx={current_idx}, offset={current_offset:.4f}, measure={current_event.measure}")
+        return overlap
 
     return False
 
@@ -156,7 +197,7 @@ def play_warning_sound():
 
 def main():
     """Main function to run the MIDI validator"""
-    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, chord_wrong_notes, notes_should_be_held, last_note_time
+    global events, current_event_idx, currently_pressed, pending_chord_notes, chord_start_time, chord_wrong_notes, notes_should_be_held, last_note_time, repeat_boundaries
 
     parser = argparse.ArgumentParser(description="MIDI piano validator")
     parser.add_argument("xml_file", help="Path to the MusicXML file")
@@ -176,15 +217,39 @@ def main():
         action="store_true",
         help="Enable sound feedback for warnings and errors",
     )
+    parser.add_argument(
+        "--debug-held-notes",
+        action="store_true",
+        help="Enable debug tracing for held note warnings",
+    )
     args = parser.parse_args()
+
+    # Reset global state
+    repeat_boundaries.clear()
 
     print("Chargement de la partition...")
     score = converter.parse(args.xml_file)
 
     # Expand repeats if requested
+    # IMPORTANT: music21's expandRepeats() has bugs that create offset discrepancies
+    # between parts (e.g., left hand at 24.0, right hand at 24.5 for the same measure).
+    # Until this is fixed in music21, repeat boundary detection is disabled to avoid
+    # false positives from measure number quirks.
     if args.repeats:
         print("Expansion des répétitions...")
+        print("⚠️  AVERTISSEMENT: music21's expandRepeats() peut créer des décalages d'offset entre les mains.")
+        print("   Cela peut causer des avertissements de notes tenues incorrects.")
+        print("   Pour de meilleurs résultats, utilisez le fichier MusicXML sans l'option --repeats.\n")
         score = score.expandRepeats()
+
+        # Repeat boundary detection is disabled due to music21 bugs.
+        # The measure-number-based approach produced too many false boundaries
+        # because measure numbers don't increase monotonically after expandRepeats().
+        # A proper fix requires either:
+        # 1. Fixing music21's expandRepeats() to preserve consistent offsets
+        # 2. OR using a different method to detect actual repeat boundaries
+        #    (e.g., analyzing the original score's repeat barlines before expansion)
+        repeat_boundaries.clear()
 
     # Parts: index 0 = right hand, index 1 = left hand (standard grand staff)
     if args.hand == "right":
@@ -215,6 +280,9 @@ def main():
     events.sort(key=lambda e: e.offset)
 
     events = merge_events(events)
+
+    # Precompute the maximum event duration for the held note scan optimization
+    max_event_duration = max(float(e.duration) for e in events) if events else 0
 
     print(f"{len(events)} événements musicaux détectés (notes et accords).")
     if events:
@@ -363,16 +431,55 @@ def main():
                             missing_held_notes = []
                             if current_event_idx > 0:  # Il y a des événements précédents
                                 # Collecter tous les pitches uniques des événements précédents
+                                # OPTIMIZATION: Only check recent events that could potentially overlap
+                                # with the current event. We iterate backwards and find the furthest
+                                # back event that could still have notes overlapping with current event.
                                 checked_pitches = set()
-                                for prev_idx in range(current_event_idx):
+                                current_offset = float(current_event.offset)
+
+                                if args.debug_held_notes:
+                                    print(f"[DEBUG] Checking held notes at event {current_event_idx} (offset {current_offset})")
+                                    if repeat_boundaries:
+                                        print(f"[DEBUG] Repeat boundaries: {repeat_boundaries}")
+
+                                # Find the earliest event we need to check by looking for the
+                                # earliest offset that could still have a note sounding at current_offset.
+                                # Use max_event_duration to ensure we don't skip long-duration events
+                                # that might still overlap even if shorter events between them don't.
+                                earliest_relevant_idx = 0
+                                for prev_idx in range(current_event_idx - 1, -1, -1):
                                     prev_event = events[prev_idx]
+                                    # If this event starts so far back that even the longest note
+                                    # in the piece couldn't reach the current offset, stop scanning
+                                    if float(prev_event.offset) + max_event_duration < current_offset:
+                                        earliest_relevant_idx = prev_idx + 1
+                                        break
+
+                                if args.debug_held_notes:
+                                    print(f"[DEBUG] Scanning events {earliest_relevant_idx} to {current_event_idx - 1}")
+
+                                for prev_idx in range(earliest_relevant_idx, current_event_idx):
+                                    prev_event = events[prev_idx]
+                                    prev_end_offset = float(prev_event.offset + prev_event.duration)
+
                                     for prev_pitch in prev_event.pitches:
                                         # Ne vérifier chaque pitch qu'une seule fois
                                         if prev_pitch not in checked_pitches:
                                             checked_pitches.add(prev_pitch)
-                                            if should_note_be_held(prev_pitch, current_event_idx):
-                                                if prev_pitch not in currently_pressed:
-                                                    missing_held_notes.append(prev_pitch)
+                                            should_be_held = should_note_be_held(prev_pitch, current_event_idx, debug=args.debug_held_notes)
+                                            is_pressed = prev_pitch in currently_pressed
+
+                                            if args.debug_held_notes:
+                                                pitch_dur = prev_event.get_pitch_duration(prev_pitch)
+                                                event_dur = prev_event.duration
+                                                dur_info = f" (pitch_dur={pitch_dur:.2f}, event_dur={event_dur:.2f})" if pitch_dur != event_dur else ""
+                                                print(f"[DEBUG]   Pitch {midi_to_french(prev_pitch)}: should_be_held={should_be_held}, is_pressed={is_pressed}{dur_info}")
+
+                                            if should_be_held and not is_pressed:
+                                                missing_held_notes.append(prev_pitch)
+                                                if args.debug_held_notes:
+                                                    print(f"[DEBUG]   -> MISSING: {midi_to_french(prev_pitch)}")
+
 
                             if missing_held_notes:
                                 if args.sound:

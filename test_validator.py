@@ -316,6 +316,244 @@ class TestShouldNoteBeHeld(unittest.TestCase):
         # Using floating point tolerance to handle rounding errors
         self.assertFalse(should_note_be_held(60, 1), "Notes ending exactly when next starts shouldn't require holding")
 
+    def test_long_note_with_shorter_notes_between(self):
+        """Test that long notes are detected even when shorter notes are between them.
+
+        This is a regression test for the bug where the optimization to scan backwards
+        would stop too early when it encountered a short note that ended before the
+        current event, missing long notes that started earlier but still overlapped.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 8.0, 0.0, 1),   # C4: offset 0, duration 8, ends at 8 (LONG NOTE)
+            MusicEvent('note', [62], 1.0, 2.0, 1),   # D4: offset 2, duration 1, ends at 3 (short note)
+            MusicEvent('note', [64], 1.0, 4.0, 1),   # E4: offset 4, duration 1, ends at 5 (current event)
+        ]
+
+        validator_progression.events = events
+
+        # At event 2 (E4 at offset 4):
+        # - Event 1 (D4) ended at offset 3, which is before offset 4
+        # - But Event 0 (C4) ends at offset 8, which is AFTER offset 4
+        # - So C4 SHOULD be held even though D4 ended before the current event
+        self.assertTrue(should_note_be_held(60, 2),
+                       "Long note C4 should be held at event 2 even though shorter note D4 ended earlier")
+
+    def test_merged_event_per_pitch_durations(self):
+        """Test that merged events with different per-pitch durations don't cause spurious warnings.
+
+        This is a regression test for the bug where both hands merged at the same offset
+        would assign the max duration to all pitches. A short right-hand note (e.g., 0.5 beats)
+        merged with a long left-hand note (e.g., 4.0 beats) would make should_note_be_held
+        incorrectly report the short note as needing to be held for 4.0 beats.
+        """
+        from validator_progression import MusicEvent, should_note_be_held, merge_events
+        import validator_progression
+
+        # Simulate both hands: right hand has short note, left hand has long note
+        right_hand_event = MusicEvent('note', [60], 0.5, 0.0, 1)  # C4: short (0.5 beats)
+        left_hand_event = MusicEvent('note', [40], 4.0, 0.0, 1)   # E2: long (4 beats)
+
+        # Merge them (simulating --hand both)
+        merged = merge_events([right_hand_event, left_hand_event])
+
+        # Verify merge preserved per-pitch durations
+        self.assertEqual(len(merged), 1)
+        merged_event = merged[0]
+        self.assertIsNotNone(merged_event.pitch_durations, "Merged event should have per-pitch durations")
+        self.assertAlmostEqual(merged_event.get_pitch_duration(60), 0.5)
+        self.assertAlmostEqual(merged_event.get_pitch_duration(40), 4.0)
+
+        # Create events list with merged event and a later event
+        events = merged + [MusicEvent('note', [62], 1.0, 2.0, 1)]  # D4 at offset 2
+
+        validator_progression.events = events
+
+        # At event 1 (D4 at offset 2):
+        # - C4 had duration 0.5, ending at 0.5 -> should NOT be held
+        # - E2 had duration 4.0, ending at 4.0 -> SHOULD be held
+        self.assertFalse(should_note_be_held(60, 1),
+                        "C4 should NOT be held - its per-pitch duration is 0.5, ending at 0.5 < 2.0")
+        self.assertTrue(should_note_be_held(40, 1),
+                       "E2 SHOULD be held - its per-pitch duration is 4.0, ending at 4.0 > 2.0")
+
+    def test_merged_event_same_durations_no_pitch_durations(self):
+        """Test that merged events with identical per-pitch durations don't set pitch_durations."""
+        from validator_progression import MusicEvent, merge_events
+
+        # Both hands have the same duration
+        right_hand = MusicEvent('note', [60], 1.0, 0.0, 1)  # C4: 1 beat
+        left_hand = MusicEvent('note', [40], 1.0, 0.0, 1)   # E2: 1 beat
+
+        merged = merge_events([right_hand, left_hand])
+
+        self.assertEqual(len(merged), 1)
+        # pitch_durations should be None when all durations are the same
+        self.assertIsNone(merged[0].pitch_durations)
+
+    def test_get_pitch_duration_without_pitch_durations(self):
+        """Test that get_pitch_duration falls back to event duration when no pitch_durations set."""
+        from validator_progression import MusicEvent
+
+        event = MusicEvent('chord', [60, 64, 67], 2.0, 0.0, 1)
+        self.assertAlmostEqual(event.get_pitch_duration(60), 2.0)
+        self.assertAlmostEqual(event.get_pitch_duration(64), 2.0)
+
+    def test_get_pitch_duration_with_pitch_durations(self):
+        """Test that get_pitch_duration returns correct per-pitch duration."""
+        from validator_progression import MusicEvent
+
+        pitch_durations = {60: 0.5, 40: 4.0}
+        event = MusicEvent('chord', [60, 40], 4.0, 0.0, 1, pitch_durations=pitch_durations)
+        self.assertAlmostEqual(event.get_pitch_duration(60), 0.5)
+        self.assertAlmostEqual(event.get_pitch_duration(40), 4.0)
+
+    def test_repeat_boundary_no_spurious_held_note_warnings(self):
+        """Test that notes from before a repeat boundary don't trigger held note warnings.
+
+        This is a regression test for the bug where notes from the last bar of the
+        first pass would spuriously trigger held note warnings at the first bar of the
+        second pass. This happens because at the repeat boundary, note end offsets may
+        be very close to the current event offset due to floating-point arithmetic,
+        and the previous tolerance (1e-9) was too tight to filter them out.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Simulate a 9-bar waltz in 3/4 time with a repeat
+        # Bar 9 (first pass, offset 24-27): dotted half note G#2 + quarter notes
+        # Bar 10 (second pass = bar 1 repeated, offset 27): chord G#1 + G#2
+        events = [
+            # Last few events of first pass (bar 9)
+            MusicEvent('chord', [44, 32], 3.0, 24.0, 9),   # G#2+G#1 dotted half
+            MusicEvent('note', [63], 0.5, 25.5, 9),          # D#4 eighth
+            MusicEvent('note', [59], 1.0, 26.0, 9),           # B3 quarter, ends at 27.0
+            # First event of second pass (bar 10 = bar 1 repeated)
+            MusicEvent('chord', [44, 32], 3.0, 27.0, 10),
+        ]
+        validator_progression.events = events
+
+        # At the repeat boundary, no notes from bar 9 should require holding
+        # B3 ends at exactly 27.0, G#2+G#1 ends at exactly 27.0
+        self.assertFalse(should_note_be_held(59, 3),
+                        "B3 from bar 9 should NOT be held at bar 10 (ends exactly at boundary)")
+        self.assertFalse(should_note_be_held(44, 3),
+                        "G#2 from bar 9 should NOT be held at bar 10 (ends exactly at boundary)")
+        self.assertFalse(should_note_be_held(32, 3),
+                        "G#1 from bar 9 should NOT be held at bar 10 (ends exactly at boundary)")
+
+    def test_repeat_boundary_fp_error_no_spurious_warning(self):
+        """Test that tiny floating-point errors at the repeat boundary don't cause warnings.
+
+        When expandRepeats() shifts offsets, tiny FP discrepancies can make the second
+        pass start at an offset like 26.9999999 instead of 27.0. This should not cause
+        notes ending at exactly 27.0 to appear as "held."
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Simulate FP error: second pass offset slightly before exact boundary
+        events = [
+            MusicEvent('note', [59], 1.0, 26.0, 9),           # B3: ends at 27.0
+            MusicEvent('chord', [44, 32], 3.0, 27.0 - 1e-7, 10),  # Tiny FP error in offset
+        ]
+        validator_progression.events = events
+
+        # B3 ends at 27.0, current offset is 26.9999999
+        # Overlap = 27.0 - 26.9999999 = 1e-7, which is < 0.01 tolerance
+        self.assertFalse(should_note_be_held(59, 1),
+                        "B3 should NOT be held despite tiny FP offset error at repeat boundary")
+
+    def test_genuine_held_note_still_detected(self):
+        """Test that genuine held notes are still detected with the increased tolerance.
+
+        A note with significant overlap (>= 0.125 quarter notes, i.e., at least a 32nd
+        note) should still trigger a held note warning.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        events = [
+            MusicEvent('note', [60], 2.0, 0.0, 1),   # C4: offset 0, duration 2.0, ends at 2.0
+            MusicEvent('note', [62], 1.0, 1.0, 1),   # D4: offset 1, duration 1
+        ]
+        validator_progression.events = events
+
+        # C4 extends 1.0 beats past D4's start (2.0 - 1.0 = 1.0 overlap)
+        # This is well above the 0.01 tolerance, so it should be detected
+        self.assertTrue(should_note_be_held(60, 1),
+                       "C4 should be held - it has 1.0 beat of overlap (well above 0.01 tolerance)")
+
+    def test_repeat_boundary_second_bar_of_second_repeat(self):
+        """Test that notes from the first repeat don't trigger warnings in later bars of second repeat.
+
+        This is a regression test for the bug where the repeat boundary check incorrectly
+        skipped events at and after the boundary, rather than skipping events before it.
+
+        Simulates a piece with measures 1-9 repeated:
+        - First pass: measures 1-9 (offsets 0-27)
+        - Second pass: measures 1-9 again (offsets 27-54)
+
+        The bug manifested when checking held notes at bars 2, 3, etc. of the second repeat.
+        """
+        from validator_progression import MusicEvent, should_note_be_held
+        import validator_progression
+
+        # Simulate a waltz with repeat (3/4 time, 3 beats per bar)
+        # First pass: bars 1-3 (offsets 0-9)
+        # Second pass: bars 1-3 repeated (offsets 9-18)
+        events = [
+            # First pass - bar 1 (offset 0-3)
+            MusicEvent('chord', [44, 32], 3.0, 0.0, 1),    # G#2+G#1 dotted half
+            MusicEvent('note', [63], 1.0, 1.5, 1),          # D#4 quarter
+            MusicEvent('note', [59], 0.5, 2.5, 1),          # B3 eighth
+
+            # First pass - bar 2 (offset 3-6)
+            MusicEvent('chord', [44, 32], 3.0, 3.0, 2),    # G#2+G#1 dotted half
+            MusicEvent('note', [65], 1.0, 4.5, 2),          # F4 quarter
+            MusicEvent('note', [61], 0.5, 5.5, 2),          # C#4 eighth
+
+            # First pass - bar 3 (offset 6-9)
+            MusicEvent('chord', [44, 32], 3.0, 6.0, 3),    # G#2+G#1 dotted half
+            MusicEvent('note', [63], 1.0, 7.5, 3),          # D#4 quarter
+            MusicEvent('note', [59], 0.5, 8.5, 3),          # B3 eighth, ends at 9.0
+
+            # Second pass - bar 1 repeated (offset 9-12)
+            MusicEvent('chord', [44, 32], 3.0, 9.0, 4),    # G#2+G#1 dotted half
+            MusicEvent('note', [63], 1.0, 10.5, 4),         # D#4 quarter
+            MusicEvent('note', [59], 0.5, 11.5, 4),         # B3 eighth
+
+            # Second pass - bar 2 repeated (offset 12-15) - THIS IS WHERE BUG OCCURRED
+            MusicEvent('chord', [44, 32], 3.0, 12.0, 5),   # G#2+G#1 dotted half
+            MusicEvent('note', [65], 1.0, 13.5, 5),         # F4 quarter
+            MusicEvent('note', [61], 0.5, 14.5, 5),         # C#4 eighth
+        ]
+        validator_progression.events = events
+
+        # Simulate repeat_boundaries being set (first pass ends at offset 9.0)
+        validator_progression.repeat_boundaries = [9.0]
+
+        # At bar 2 of second repeat (event index 12, offset 12.0),
+        # notes from bar 2 of first repeat should NOT be flagged as needing to be held
+        # because they're on the other side of the repeat boundary.
+
+        # G#2 from first-pass bar 2 ends at 6.0, should NOT be held at second-pass bar 2 (offset 12.0)
+        self.assertFalse(should_note_be_held(44, 12),
+                        "G#2 from first-pass bar 2 should NOT be held at second-pass bar 2")
+
+        # F4 from first-pass bar 2 ends at 5.5, should NOT be held at second-pass bar 2 (offset 12.0)
+        # Note: checking at event 13 (F4 at offset 13.5) to see if F4 from first pass should be held
+        self.assertFalse(should_note_be_held(65, 13),
+                        "F4 from first-pass bar 2 should NOT be held at second-pass bar 2 F4")
+
+        # But G#2 from second-pass bar 1 ends at 12.0, should NOT be held at second-pass bar 2
+        # (ends exactly at boundary, within tolerance)
+        self.assertFalse(should_note_be_held(44, 12),
+                        "G#2 from second-pass bar 1 should NOT be held at second-pass bar 2 (ends at boundary)")
+
+
 
 class TestFormatEvent(unittest.TestCase):
     """Test the format_event function"""
